@@ -2,7 +2,7 @@
 
 Exposes an existing OpenSearch cluster to Open WebUI as MCP tools. This service does not deploy OpenSearch. You supply the URL and credentials of a cluster you already run.
 
-The server is the official [opensearch-mcp-server-py](https://github.com/opensearch-project/opensearch-mcp-server-py) package, pinned to 0.12.0 in [Dockerfile](./Dockerfile). OpenSearch does not publish a prebuilt image for it, so the compose file builds it locally.
+The server is the official [opensearch-mcp-server-py](https://github.com/opensearch-project/opensearch-mcp-server-py) package, pinned to 0.12.0 in [Dockerfile](./Dockerfile). OpenSearch does not publish a prebuilt image for it, so the compose file builds it locally. The container runs as a non-root user.
 
 It runs in Streamable HTTP mode at `http://opensearch-mcp:9900/mcp` on `opensearch-net`, shared with Open WebUI; its port is not published to the host.
 
