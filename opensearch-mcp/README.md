@@ -4,7 +4,7 @@ Exposes an existing OpenSearch cluster to Open WebUI as MCP tools. This service 
 
 The server is the official [opensearch-mcp-server-py](https://github.com/opensearch-project/opensearch-mcp-server-py) package, pinned to 0.12.0 in [Dockerfile](./Dockerfile). OpenSearch does not publish a prebuilt image for it, so the compose file builds it locally.
 
-It runs in Streamable HTTP mode at `http://opensearch-mcp:9900/mcp` inside `mcp-net`, and on `127.0.0.1:5102` on the host.
+It runs in Streamable HTTP mode at `http://opensearch-mcp:9900/mcp` on `opensearch-net`, shared with Open WebUI; its port is not published to the host.
 
 ## Setup
 
@@ -27,9 +27,11 @@ Run these commands from the project root.
 2. Build and start the service:
 
    ```bash
-   podman compose up -d --build opensearch-mcp   # or: docker compose up -d --build opensearch-mcp
-   podman logs fortigate-mcp-opensearch-mcp-1
+   podman compose -f compose.yaml -f compose.podman.yaml up -d --build opensearch-mcp
+   podman compose -f compose.yaml -f compose.podman.yaml logs opensearch-mcp
    ```
+
+   For Docker, use `docker compose` without the Podman override.
 
    A cluster that is unreachable shows `Cannot connect to host ...` in the logs. The MCP endpoint still starts, but its tools will fail until the URL is correct.
 
@@ -45,7 +47,7 @@ The compose file already lists the connection in `TOOL_SERVER_CONNECTIONS`:
 
 - Type: MCP (Streamable HTTP)
 - URL: `http://opensearch-mcp:9900/mcp`
-- Auth: none. The server has no authentication, so it is reachable only inside `mcp-net` and from `127.0.0.1:5102`.
+- Auth: none. The server has no authentication. Its port is not published to the host, but containers attached to `opensearch-net` can access it.
 
 That variable is read only on first boot of an empty `open-webui-data` volume. If Open WebUI already has a volume, add the connection by one of these routes:
 

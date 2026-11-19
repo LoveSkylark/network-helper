@@ -6,24 +6,25 @@ Open WebUI is the front end, with several MCP services behind it. Compose config
 
 | Service | Folder | Host port | Container port | Purpose |
 |---|---|---|---|---|
-| open-webui | `open-webui/` (image only) | 5100 | 8080 | Chat UI and Microsoft sign-in |
-| fortios-mcp | `fortigate-mcp/` | 5101 | 8000 | FortiGate / FortiOS tools |
-| opensearch-mcp | `opensearch-mcp/` | 5102 | 9900 | OpenSearch tools |
-| cisco-ise-mcp | `cisco-ise-mcp/` | 5103 | 5000 | Cisco ISE tools |
-| cisco-aci-mcp | `cisco-aci-mcp/` | 5104 | 8000 | Cisco ACI tools |
-| netbox-mcp | `netbox-mcp/` | 5105 | 8000 | NetBox tools (read-only) |
-| librenms-mcp | `librenms-mcp/` | 5106 | 8000 | LibreNMS tools (read-only by default) |
+| open-webui | `open-webui/` (image only) | 5000 | 8080 | Chat UI and Microsoft sign-in |
+| fortios-mcp | `fortigate-mcp/` | not published | 8000 | FortiGate / FortiOS tools |
+| opensearch-mcp | `opensearch-mcp/` | not published | 9900 | OpenSearch tools |
+| cisco-ise-mcp | `cisco-ise-mcp/` | not published | 5000 | Cisco ISE tools |
+| cisco-aci-mcp | `cisco-aci-mcp/` | not published | 8000 | Cisco ACI tools |
+| netbox-mcp | `netbox-mcp/` | not published | 8000 | NetBox tools (read-only) |
+| librenms-mcp | `librenms-mcp/` | not published | 8000 | LibreNMS tools (read-only by default) |
 
 The LibreNMS MCP exits at startup until `LIBRENMS_TOKEN` is set in `.env`. Its `READ_ONLY_MODE` is `true` in compose, so it can't make write calls.
 
-All host ports bind to `127.0.0.1` and are in the 5100+ range. Port 5000 is avoided because macOS AirPlay Receiver holds it.
+Only Open WebUI publishes a host port, `5000`, on all interfaces. Restrict access with a firewall and use HTTPS through a reverse proxy for remote access; the published port itself serves HTTP. Port 5000 may already be occupied on macOS by AirPlay Receiver.
 
-Services talk to each other on the `mcp-net` network by service name (for example `http://fortios-mcp:8000/mcp`). Open WebUI's `TOOL_SERVER_CONNECTIONS` in [compose.yaml](./compose.yaml) lists these MCP endpoints.
+Each MCP service has its own bridge network shared with Open WebUI, which connects by service name (for example `http://fortios-mcp:8000/mcp`). MCP services do not share a Compose network with each other, and their ports are not published to the host. For Podman, use the commands below with [compose.podman.yaml](./compose.podman.yaml): its `isolate` setting blocks direct traffic between these networks. Docker users use the base Compose file and should verify their host firewall enforces bridge-network isolation. The networks allow outbound access to integrations and do not replace host and network firewall rules. Open WebUI's `TOOL_SERVER_CONNECTIONS` in [compose.yaml](./compose.yaml) lists the MCP endpoints.
 
 ## Layout
 
 ```
-compose.yaml          Cluster definition (the only compose file)
+compose.yaml          Cluster definition
+compose.podman.yaml   Podman bridge-network isolation override
 .env                  All configuration and secrets for every container
 open-webui/           Open WebUI deployment notes
 fortigate-mcp/        FortiOS MCP build (pinned upstream)
@@ -46,7 +47,7 @@ Set the values for the integrations you use. Compose reads this root `.env` for 
 
 Things to set before first use:
 
-- **Open WebUI:** `WEBUI_SECRET_KEY` (generate with `openssl rand -hex 32`), the local admin (`WEBUI_ADMIN_*`), and the Microsoft Entra values (`MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`, `MICROSOFT_CLIENT_TENANT_ID`).
+- **Open WebUI:** `WEBUI_URL` (the externally reachable URL without a trailing slash), `WEBUI_SECRET_KEY` (generate with `openssl rand -hex 32`), the local admin (`WEBUI_ADMIN_*`), and the Microsoft Entra values (`MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`, `MICROSOFT_CLIENT_TENANT_ID`).
 - **GitHub Models:** `GITHUB_TOKEN`.
 - **FortiOS:** `FORTIOS_HOST`, `FORTIOS_API_TOKEN`, `FORTIOS_VDOM`, `FORTIOS_VERIFY_SSL`.
 - **OpenSearch:** `OPENSEARCH_URL`, `OPENSEARCH_USERNAME`, `OPENSEARCH_PASSWORD`, `OPENSEARCH_SSL_VERIFY`.
@@ -60,14 +61,16 @@ Variable names are unique across services, except the Cisco ACI credentials, whi
 Changing `.env` needs a container recreate, not a rebuild:
 
 ```sh
-podman compose up -d --force-recreate
+podman compose -f compose.yaml -f compose.podman.yaml up -d --force-recreate
 ```
 
 ## Start the cluster
 
 ```sh
-podman compose up -d --build
+podman compose -f compose.yaml -f compose.podman.yaml up -d --build
 ```
+
+For Docker, use `docker compose up -d --build` instead; do not apply the Podman override. Always include both `-f` options when using Podman Compose.
 
 Compose no longer forces an architecture. On Apple Silicon Podman VMs, native ARM builds of `cisco-aci-mcp` and `open-webui` previously crashed with SIGILL in `cryptography`; verify they start successfully in your environment.
 
@@ -75,7 +78,7 @@ Check status and health:
 
 ```sh
 podman ps
-curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:5100/health
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:5000/health
 ```
 
 MCP healthchecks initialize the local MCP endpoint and close any session created by the check. They verify the MCP server responds, not that its upstream network service or credentials work. A healthcheck reporting `unhealthy` does not itself restart a container. Recreate existing containers after changing the compose file to apply healthcheck configuration.
@@ -83,19 +86,19 @@ MCP healthchecks initialize the local MCP endpoint and close any session created
 Stop the cluster:
 
 ```sh
-podman compose down
+podman compose -f compose.yaml -f compose.podman.yaml down
 ```
 
-Named volume `open-webui-data` keeps chats, users, and settings across restarts. `podman compose down -v` deletes it.
+Named volume `open-webui-data` keeps chats, users, and settings across restarts. Adding `-v` to the `down` command deletes it.
 
 ## Open WebUI
 
-Open http://localhost:5100 and sign in with Microsoft or the local admin.
+Open the URL configured in `WEBUI_URL` and sign in with Microsoft or the local admin. For direct remote access, set it to `http://<server-address>:5000`; use the HTTPS URL instead if a reverse proxy terminates TLS.
 
 The Entra app registration needs this redirect URI:
 
 ```
-http://localhost:5100/oauth/microsoft/callback
+<WEBUI_URL>/oauth/microsoft/callback
 ```
 
 `TOOL_SERVER_CONNECTIONS` is applied only when the Open WebUI volume is first created. For an existing volume, add or change tool servers in Settings → Tools, or through the admin API. See [open-webui/README.md](./open-webui/README.md).
@@ -103,7 +106,7 @@ http://localhost:5100/oauth/microsoft/callback
 ## Adding or changing an MCP service
 
 1. Create a folder with a Dockerfile that builds from a pinned upstream ref.
-2. Add the service to `compose.yaml` with a `127.0.0.1:510X:<container port>` mapping on `mcp-net`.
+2. Add a dedicated bridge network and connect both the service and Open WebUI to it, without publishing an MCP host port. Add the network to `compose.podman.yaml` as well.
 3. Add its variables to `.env.example` and `.env`, and reference them in the service's `environment:` block.
 4. Add its URL to `TOOL_SERVER_CONNECTIONS` (the container-internal URL, for example `http://name:port/mcp`).
 5. Recreate the cluster and check the endpoint returns HTTP 200 for an MCP `initialize` request.

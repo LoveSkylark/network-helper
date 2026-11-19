@@ -1,4 +1,4 @@
-name: fortigate-mcp
+name: network-helper
 
 x-mcp-healthcheck-script: &mcp-healthcheck-script |
   import json
@@ -61,19 +61,24 @@ services:
       ENABLE_OPENAI_API: "true"
       OPENAI_API_BASE_URL: "https://models.github.ai/inference"
       OPENAI_API_KEY: ${GITHUB_TOKEN}
-      WEBUI_URL: "http://localhost:5100"
+      WEBUI_URL: ${WEBUI_URL:?Set WEBUI_URL in the root .env}
       ENABLE_OAUTH_PERSISTENT_CONFIG: "false"
       ENABLE_OAUTH_SIGNUP: "true"
       MICROSOFT_OAUTH_SCOPE: "openid email profile"
-      MICROSOFT_REDIRECT_URI: "http://localhost:5100/oauth/microsoft/callback"
+      MICROSOFT_REDIRECT_URI: "${WEBUI_URL:?Set WEBUI_URL in the root .env}/oauth/microsoft/callback"
       # Seeds the FortiOS MCP tool server on first boot (verified on a fresh volume).
       TOOL_SERVER_CONNECTIONS: '[{"type":"mcp","url":"http://fortios-mcp:8000/mcp","path":"","auth_type":"none","key":"","config":{"enable":true},"info":{"name":"FortiOS MCP","id":"fortios-mcp"}},{"type":"mcp","url":"http://opensearch-mcp:9900/mcp","path":"","auth_type":"none","key":"","config":{"enable":true},"info":{"name":"OpenSearch MCP","id":"opensearch-mcp"}},{"type":"mcp","url":"http://cisco-ise-mcp:5000/mcp","path":"","auth_type":"none","key":"","config":{"enable":true},"info":{"name":"Cisco ISE MCP","id":"cisco-ise-mcp"}},{"type":"mcp","url":"http://cisco-aci-mcp:8000/mcp","path":"","auth_type":"none","key":"","config":{"enable":true},"info":{"name":"Cisco ACI MCP","id":"cisco-aci-mcp"}},{"type":"mcp","url":"http://netbox-mcp:8000/mcp","path":"","auth_type":"none","key":"","config":{"enable":true},"info":{"name":"NetBox MCP","id":"netbox-mcp"}},{"type":"mcp","url":"http://librenms-mcp:8000/mcp","path":"","auth_type":"none","key":"","config":{"enable":true},"info":{"name":"LibreNMS MCP","id":"librenms-mcp"}}]'
     ports:
-      - "127.0.0.1:5100:8080"
+      - "5000:8080"
     volumes:
       - open-webui-data:/app/backend/data
     networks:
-      - mcp-net
+      - fortios-net
+      - opensearch-net
+      - cisco-ise-net
+      - cisco-aci-net
+      - netbox-net
+      - librenms-net
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
@@ -94,11 +99,9 @@ services:
       MCP_TRANSPORT: "streamable-http"
       MCP_HOST: "0.0.0.0"
       MCP_PORT: "8000"
-    ports:
-      - "127.0.0.1:5101:8000"
     stdin_open: true
     networks:
-      - mcp-net
+      - fortios-net
     restart: unless-stopped
     healthcheck:
       <<: *mcp-healthcheck
@@ -112,10 +115,8 @@ services:
       OPENSEARCH_USERNAME: ${OPENSEARCH_USERNAME}
       OPENSEARCH_PASSWORD: ${OPENSEARCH_PASSWORD}
       OPENSEARCH_SSL_VERIFY: ${OPENSEARCH_SSL_VERIFY}
-    ports:
-      - "127.0.0.1:5102:9900"
     networks:
-      - mcp-net
+      - opensearch-net
     restart: unless-stopped
     healthcheck:
       <<: *mcp-healthcheck
@@ -131,10 +132,8 @@ services:
       ISE_VERIFY_SERVER_CERT: ${ISE_VERIFY_SERVER_CERT}
       ISE_VERIFY_HOSTNAME: ${ISE_VERIFY_HOSTNAME}
       DEBUG_MCP: ${DEBUG_MCP}
-    ports:
-      - "127.0.0.1:5103:5000"
     networks:
-      - mcp-net
+      - cisco-ise-net
     restart: unless-stopped
     healthcheck:
       <<: *mcp-healthcheck
@@ -147,10 +146,8 @@ services:
       APIC_URL: ${APIC_URL}
       USERNAME: ${ACI_USERNAME}
       PASSWORD: ${ACI_PASSWORD}
-    ports:
-      - "127.0.0.1:5104:8000"
     networks:
-      - mcp-net
+      - cisco-aci-net
     restart: unless-stopped
     healthcheck:
       <<: *mcp-healthcheck
@@ -166,10 +163,8 @@ services:
       TRANSPORT: "http"
       HOST: "0.0.0.0"
       PORT: "8000"
-    ports:
-      - "127.0.0.1:5105:8000"
     networks:
-      - mcp-net
+      - netbox-net
     restart: unless-stopped
     healthcheck:
       <<: *mcp-healthcheck
@@ -186,18 +181,20 @@ services:
       MCP_TRANSPORT: "http"
       MCP_HTTP_HOST: "0.0.0.0"
       MCP_HTTP_PORT: "8000"
-    ports:
-      - "127.0.0.1:5106:8000"
     networks:
-      - mcp-net
+      - librenms-net
     restart: unless-stopped
     healthcheck:
       <<: *mcp-healthcheck
       test: ["CMD", "python", "-c", *mcp-healthcheck-script, "8000"]
 
 networks:
-  mcp-net:
-    driver: bridge
+  fortios-net:
+  opensearch-net:
+  cisco-ise-net:
+  cisco-aci-net:
+  netbox-net:
+  librenms-net:
 
 volumes:
   open-webui-data:

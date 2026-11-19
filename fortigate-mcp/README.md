@@ -2,7 +2,7 @@
 
 Runs the FortiOS MCP server in a container for the cluster. The source is not stored in this repo. The Dockerfile clones the upstream project [paoloamato2/fortinet-mcp-server](https://github.com/paoloamato2/fortinet-mcp-server) at a pinned commit and installs its locked dependencies with `uv`. The [OpenSearch MCP](../opensearch-mcp/README.md) build pins its package version.
 
-The server listens at `http://fortios-mcp:8000/mcp` inside `mcp-net` and at `127.0.0.1:5101` on the host.
+The server listens at `http://fortios-mcp:8000/mcp` on `fortios-net`, shared with Open WebUI; its port is not published to the host.
 
 ## Setup
 
@@ -19,10 +19,10 @@ Run these commands from the project root.
 2. Start it through the root compose file, which builds the image:
 
    ```bash
-   podman compose up -d --build fortios-mcp
+   podman compose -f compose.yaml -f compose.podman.yaml up -d --build fortios-mcp
    ```
 
-   If the container keeps the old image, use `podman compose up -d --force-recreate fortios-mcp`.
+   If the container keeps the old image, use `podman compose -f compose.yaml -f compose.podman.yaml up -d --force-recreate fortios-mcp`.
 
 ## Updating the upstream version
 

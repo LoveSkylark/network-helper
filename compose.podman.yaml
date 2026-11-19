@@ -1,0 +1,12 @@
+x-isolated-network: &isolated-network
+  driver: bridge
+  driver_opts:
+    isolate: "1"
+
+networks:
+  fortios-net: *isolated-network
+  opensearch-net: *isolated-network
+  cisco-ise-net: *isolated-network
+  cisco-aci-net: *isolated-network
+  netbox-net: *isolated-network
+  librenms-net: *isolated-network
