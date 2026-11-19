@@ -91,6 +91,16 @@ podman compose -f compose.yaml -f compose.podman.yaml down
 
 Named volume `open-webui-data` keeps chats, users, and settings across restarts. Adding `-v` to the `down` command deletes it.
 
+## Configuration tests
+
+Run the Compose configuration checks from the project root:
+
+```sh
+python3 -m unittest discover -s tests -v
+```
+
+The tests require Python 3 and Podman Compose or Docker Compose. They render both configurations using `.env.example`, not the real `.env`, and do not start containers. Set `COMPOSE_RUNTIME=docker` or `COMPOSE_RUNTIME=podman` to select a runtime when both are installed. These checks do not verify runtime connectivity or firewall isolation.
+
 ## Open WebUI
 
 Open the URL configured in `WEBUI_URL` and sign in with Microsoft or the local admin. For direct remote access, set it to `http://<server-address>:5000`; use the HTTPS URL instead if a reverse proxy terminates TLS.
