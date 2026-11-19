@@ -69,12 +69,7 @@ podman compose up -d --force-recreate
 podman compose up -d --build
 ```
 
-On Apple Silicon, `cisco-aci-mcp` and `open-webui` run as `linux/amd64` under emulation. Their `arm64` builds crash in `cryptography` (SIGILL) on the Podman VM. The compose file sets `platform: linux/amd64` on those services. Compose ignores that setting for builds, so build the ACI image explicitly:
-
-```sh
-podman build --platform linux/amd64 -t cisco-aci-mcp:local cisco-aci-mcp
-podman compose up -d --force-recreate
-```
+Compose no longer forces an architecture. On Apple Silicon Podman VMs, native ARM builds of `cisco-aci-mcp` and `open-webui` previously crashed with SIGILL in `cryptography`; verify they start successfully in your environment.
 
 Check status and health:
 

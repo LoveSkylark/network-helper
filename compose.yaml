@@ -48,8 +48,6 @@ x-mcp-healthcheck: &mcp-healthcheck
 services:
   open-webui:
     image: ghcr.io/open-webui/open-webui:main
-    # arm64 builds crash on Apple Silicon Podman VMs (SIGILL in cryptography); amd64 runs under emulation.
-    platform: linux/amd64
     container_name: open-webui
     environment:
       WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY}
@@ -143,8 +141,6 @@ services:
       test: ["CMD", "python", "-c", *mcp-healthcheck-script, "5000"]
 
   cisco-aci-mcp:
-    # cryptography (via mcp) crashes with SIGILL on arm64 Podman VMs; amd64 runs under emulation.
-    platform: linux/amd64
     build: cisco-aci-mcp
     image: cisco-aci-mcp:local
     environment:
@@ -161,8 +157,6 @@ services:
       test: ["CMD", "python", "-c", *mcp-healthcheck-script, "8000"]
 
   netbox-mcp:
-    # Matches the other Python MCP images; avoids arm64 SIGILL in native deps under the Podman VM.
-    platform: linux/amd64
     build: netbox-mcp
     image: netbox-mcp:local
     environment:
@@ -182,8 +176,6 @@ services:
       test: ["CMD", "python", "-c", *mcp-healthcheck-script, "8000"]
 
   librenms-mcp:
-    # Matches the other Python MCP images; avoids arm64 SIGILL in native deps under the Podman VM.
-    platform: linux/amd64
     build: librenms-mcp
     image: librenms-mcp:local
     environment:
