@@ -23,7 +23,7 @@ def referenced_variables():
     }
 
 
-def render_compose(runtime, *, podman_override):
+def render_compose(runtime, *, podman_override, overrides=None):
     variables = referenced_variables() | set(ENV_KEY.findall(EXAMPLE_ENV.read_text()))
     variables.update({
         "COMPOSE_FILE",
@@ -34,6 +34,8 @@ def render_compose(runtime, *, podman_override):
         "COMPOSE_PATH_SEPARATOR",
     })
     environment = {key: value for key, value in os.environ.items() if key not in variables}
+    if overrides:
+        environment.update(overrides)
     command = [
         runtime,
         "compose",
@@ -59,6 +61,7 @@ class ComposeConfigurationTests(unittest.TestCase):
             runtime = shutil.which("podman") or shutil.which("docker")
         if runtime is None:
             raise RuntimeError("Install Podman or Docker with Compose, or set COMPOSE_RUNTIME.")
+        cls.runtime = runtime
         cls.base = render_compose(runtime, podman_override=False)
         cls.podman = render_compose(runtime, podman_override=True)
 
@@ -77,7 +80,7 @@ class ComposeConfigurationTests(unittest.TestCase):
         self.assertEqual(environment["WEBUI_URL"], url)
         self.assertEqual(environment["MICROSOFT_REDIRECT_URI"], f"{url}/oauth/microsoft/callback")
 
-    def test_only_webui_publishes_port_5000(self):
+    def test_only_webui_publishes_port_80(self):
         services = self.base["services"]
         published = {
             name: service["ports"]
@@ -87,10 +90,16 @@ class ComposeConfigurationTests(unittest.TestCase):
         self.assertEqual(set(published), {"open-webui"})
         self.assertEqual(len(published["open-webui"]), 1)
         port = published["open-webui"][0]
-        self.assertEqual(str(port["published"]), "5000")
+        self.assertEqual(str(port["published"]), "80")
         self.assertEqual(port["target"], 8080)
         self.assertIn(port.get("host_ip", ""), ("", "0.0.0.0", "::"))
         self.assertEqual(port.get("protocol", "tcp"), "tcp")
+
+    def test_mcp_network_subnets_are_allocated_by_runtime(self):
+        for config in (self.base, self.podman):
+            for name, network in config["networks"].items():
+                with self.subTest(network=name):
+                    self.assertFalse(network.get("ipam", {}).get("config"))
 
     def test_mcp_services_have_dedicated_webui_networks(self):
         services = self.base["services"]

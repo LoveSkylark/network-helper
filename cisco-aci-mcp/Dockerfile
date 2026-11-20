@@ -27,6 +27,7 @@ RUN groupadd --gid 10001 mcp \
 WORKDIR /app
 COPY --from=builder /install /usr/local
 COPY --from=builder /src/scripts/server.py /app/server.py
+COPY aci_auth.py /app/aci_auth.py
 COPY http_entrypoint.py /app/http_entrypoint.py
 
 USER mcp

@@ -1,6 +1,6 @@
 # Open WebUI
 
-Chat front end for the cluster. It runs from the root [compose.yaml](../compose.yaml) and publishes port 5000 on all interfaces.
+Chat front end for the cluster. It runs from the root [compose.yaml](../compose.yaml) and publishes port 80 on all interfaces.
 
 ## Setup
 
@@ -55,6 +55,22 @@ The FortiOS tools can create, update, and delete firewall objects and policies. 
 
 The OpenSearch MCP service is described in [opensearch-mcp/README.md](../opensearch-mcp/README.md). It is listed in `TOOL_SERVER_CONNECTIONS` at `http://opensearch-mcp:9900/mcp`, but that env var is only read on first boot of an empty volume. For an existing volume, add it in the GUI or through the admin API, as described there.
 
-## GitHub Models
+## MCP tool status and authentication
 
-Compose configures GitHub Models at `https://models.github.ai/inference` as an OpenAI-compatible backend, using `GITHUB_TOKEN` from the root `.env`. Supply a token with access to the models you intend to use.
+The custom image shows when a tool starts, finishes, or fails for all six bundled MCP servers. It also forwards informational text and progress when the server sends them (for example, `LibreNMS: Listing devices...`). It does not forward log metadata or change tool approval. After changing the forwarding patch, rebuild and recreate Open WebUI with `docker compose up -d --no-deps --build open-webui`.
+
+FortiOS, LibreNMS, and NetBox send API tokens per request. OpenSearch and Cisco ISE API calls use configured credentials. Rotate expired or revoked credentials and recreate the affected container. Cisco ACI acquires a new cookie on demand after APIC reports token expiry; only a rejected GET is retried once. Cisco ISE web-session tools handle their own cookie expiry. No service sends background requests solely to keep a login alive, and existing request timeouts still apply.
+
+## GitHub Copilot
+
+The custom image includes the Copilot SDK and its Open WebUI Pipe. Set `COPILOT_GITHUB_TOKEN` in the root `.env` to a personal fine-grained token with the **Copilot Requests** account permission and access to Copilot. All users of this Pipe share that account and its usage limits.
+
+After starting the cluster, an Open WebUI administrator must register the Pipe:
+
+1. Open **Admin Panel > Functions** and create a function with ID `copilot`.
+2. Set its content to `from copilot_pipe import Pipe`, save it, and enable it.
+3. In a new chat, select a **Copilot:** model and select the MCP servers to use.
+
+The Pipe uses only the selected MCP tools and asks for confirmation before every tool call. A call without an interactive confirmation is denied. MCP tools can modify network devices, so restrict model and tool access to authorized users. Chat messages and approved tool results are sent to GitHub Copilot under the shared account. The Pipe supports text messages; images are not supported.
+
+Existing Open WebUI volumes may retain the retired GitHub Models connection. Remove it under **Admin Settings > Connections**.

@@ -1,12 +1,12 @@
 # MCP cluster
 
-Open WebUI is the front end, with several MCP services behind it. Compose configures GitHub Models as the OpenAI-compatible AI backend, and Open WebUI uses the MCP services as tools. Everything starts from one compose file in this folder.
+Open WebUI is the front end, with several MCP services behind it. A Copilot SDK Pipe supplies the chat models, and Open WebUI uses the MCP services as tools. Everything starts from one compose file in this folder.
 
 ## Services
 
 | Service | Folder | Host port | Container port | Purpose |
 |---|---|---|---|---|
-| open-webui | `open-webui/` (image only) | 5000 | 8080 | Chat UI and Microsoft sign-in |
+| open-webui | `copilot-webui/` | 80 | 8080 | Chat UI, Copilot SDK, and Microsoft sign-in |
 | fortios-mcp | `fortigate-mcp/` | not published | 8000 | FortiGate / FortiOS tools |
 | opensearch-mcp | `opensearch-mcp/` | not published | 9900 | OpenSearch tools |
 | cisco-ise-mcp | `cisco-ise-mcp/` | not published | 5000 | Cisco ISE tools |
@@ -16,9 +16,11 @@ Open WebUI is the front end, with several MCP services behind it. Compose config
 
 The LibreNMS MCP exits at startup until `LIBRENMS_TOKEN` is set in `.env`. Its `READ_ONLY_MODE` is `true` in compose, so it can't make write calls.
 
-Only Open WebUI publishes a host port, `5000`, on all interfaces. Restrict access with a firewall and use HTTPS through a reverse proxy for remote access; the published port itself serves HTTP. Port 5000 may already be occupied on macOS by AirPlay Receiver.
+Only Open WebUI publishes a host port, `80`, on all interfaces. Restrict access with a firewall and use HTTPS through a reverse proxy for remote access; the published port itself serves HTTP.
 
 Each MCP service has its own bridge network shared with Open WebUI, which connects by service name (for example `http://fortios-mcp:8000/mcp`). MCP services do not share a Compose network with each other, and their ports are not published to the host. For Podman, use the commands below with [compose.podman.yaml](./compose.podman.yaml): its `isolate` setting blocks direct traffic between these networks. Docker users use the base Compose file and should verify their host firewall enforces bridge-network isolation. The networks allow outbound access to integrations and do not replace host and network firewall rules. Open WebUI's `TOOL_SERVER_CONNECTIONS` in [compose.yaml](./compose.yaml) lists the MCP endpoints.
+
+The container runtime allocates the bridge subnets. Configure its address pools so they do not overlap local, VPN, or remote integration networks. Changing a runtime's address pools does not move existing networks: recreate the affected networks and their attached containers to apply the new ranges. Docker's default bridge is configured separately from its default address pools; Podman has its own network configuration.
 
 ## Layout
 
@@ -27,6 +29,7 @@ compose.yaml          Cluster definition
 compose.podman.yaml   Podman bridge-network isolation override
 .env                  All configuration and secrets for every container
 open-webui/           Open WebUI deployment notes
+copilot-webui/        Open WebUI image with the Copilot SDK Pipe
 fortigate-mcp/        FortiOS MCP build (pinned upstream)
 opensearch-mcp/       OpenSearch MCP build (pinned PyPI package)
 cisco-ise-mcp/        Cisco ISE MCP build (pinned upstream)
@@ -48,7 +51,7 @@ Set the values for the integrations you use. Compose reads this root `.env` for 
 Things to set before first use:
 
 - **Open WebUI:** `WEBUI_URL` (the externally reachable URL without a trailing slash), `WEBUI_SECRET_KEY` (generate with `openssl rand -hex 32`), the local admin (`WEBUI_ADMIN_*`), and the Microsoft Entra values (`MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`, `MICROSOFT_CLIENT_TENANT_ID`).
-- **GitHub Models:** `GITHUB_TOKEN`.
+- **GitHub Copilot:** `COPILOT_GITHUB_TOKEN`, a personal fine-grained token with the Copilot Requests account permission. The token's account must have Copilot access.
 - **FortiOS:** `FORTIOS_HOST`, `FORTIOS_API_TOKEN`, `FORTIOS_VDOM`, `FORTIOS_VERIFY_SSL`.
 - **OpenSearch:** `OPENSEARCH_URL`, `OPENSEARCH_USERNAME`, `OPENSEARCH_PASSWORD`, `OPENSEARCH_SSL_VERIFY`.
 - **Cisco ISE:** `ISE_IP`, `API_USERNAME`, `API_PWD`, certificate verification flags.
@@ -78,7 +81,7 @@ Check status and health:
 
 ```sh
 podman ps
-curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:5000/health
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1/health
 ```
 
 MCP healthchecks initialize the local MCP endpoint and close any session created by the check. They verify the MCP server responds, not that its upstream network service or credentials work. A healthcheck reporting `unhealthy` does not itself restart a container. Recreate existing containers after changing the compose file to apply healthcheck configuration.
@@ -101,9 +104,17 @@ python3 -m unittest discover -s tests -v
 
 The tests require Python 3 and Podman Compose or Docker Compose. They render both configurations using `.env.example`, not the real `.env`, and do not start containers. Set `COMPOSE_RUNTIME=docker` or `COMPOSE_RUNTIME=podman` to select a runtime when both are installed. These checks do not verify runtime connectivity or firewall isolation.
 
+After building the Open WebUI image, run the Copilot Pipe tests without network access:
+
+```sh
+docker run --rm --network none -v "$PWD/copilot-webui:/work:ro" -w /work -e PYTHONPATH=/app/backend -e WEBUI_SECRET_KEY=local-test-only-not-a-real-secret --entrypoint python network-helper-copilot-webui:local -B -m unittest -v test_copilot_pipe
+```
+
 ## Open WebUI
 
-Open the URL configured in `WEBUI_URL` and sign in with Microsoft or the local admin. For direct remote access, set it to `http://<server-address>:5000`; use the HTTPS URL instead if a reverse proxy terminates TLS.
+Open the URL configured in `WEBUI_URL` and sign in with Microsoft or the local admin. For direct remote access, set it to `http://<server-address>`; use the HTTPS URL instead if a reverse proxy terminates TLS.
+
+An administrator must register the Copilot Pipe before selecting a Copilot model. See [open-webui/README.md](./open-webui/README.md). Requests use the shared Copilot account. Selected MCP tool calls require confirmation and can modify network devices; restrict access appropriately.
 
 The Entra app registration needs this redirect URI:
 

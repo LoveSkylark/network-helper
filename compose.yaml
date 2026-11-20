@@ -47,7 +47,8 @@ x-mcp-healthcheck: &mcp-healthcheck
 
 services:
   open-webui:
-    image: ghcr.io/open-webui/open-webui:main
+    build: copilot-webui
+    image: network-helper-copilot-webui:local
     container_name: open-webui
     environment:
       WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY}
@@ -57,10 +58,8 @@ services:
       MICROSOFT_CLIENT_ID: ${MICROSOFT_CLIENT_ID}
       MICROSOFT_CLIENT_SECRET: ${MICROSOFT_CLIENT_SECRET}
       MICROSOFT_CLIENT_TENANT_ID: ${MICROSOFT_CLIENT_TENANT_ID}
-      # LLM backend: GitHub Models via its OpenAI-compatible API.
       ENABLE_OPENAI_API: "true"
-      OPENAI_API_BASE_URL: "https://models.github.ai/inference"
-      OPENAI_API_KEY: ${GITHUB_TOKEN}
+      COPILOT_GITHUB_TOKEN: ${COPILOT_GITHUB_TOKEN:?Set COPILOT_GITHUB_TOKEN in the root .env}
       WEBUI_URL: ${WEBUI_URL:?Set WEBUI_URL in the root .env}
       ENABLE_OAUTH_PERSISTENT_CONFIG: "false"
       ENABLE_OAUTH_SIGNUP: "true"
@@ -69,7 +68,7 @@ services:
       # Seeds the FortiOS MCP tool server on first boot (verified on a fresh volume).
       TOOL_SERVER_CONNECTIONS: '[{"type":"mcp","url":"http://fortios-mcp:8000/mcp","path":"","auth_type":"none","key":"","config":{"enable":true},"info":{"name":"FortiOS MCP","id":"fortios-mcp"}},{"type":"mcp","url":"http://opensearch-mcp:9900/mcp","path":"","auth_type":"none","key":"","config":{"enable":true},"info":{"name":"OpenSearch MCP","id":"opensearch-mcp"}},{"type":"mcp","url":"http://cisco-ise-mcp:5000/mcp","path":"","auth_type":"none","key":"","config":{"enable":true},"info":{"name":"Cisco ISE MCP","id":"cisco-ise-mcp"}},{"type":"mcp","url":"http://cisco-aci-mcp:8000/mcp","path":"","auth_type":"none","key":"","config":{"enable":true},"info":{"name":"Cisco ACI MCP","id":"cisco-aci-mcp"}},{"type":"mcp","url":"http://netbox-mcp:8000/mcp","path":"","auth_type":"none","key":"","config":{"enable":true},"info":{"name":"NetBox MCP","id":"netbox-mcp"}},{"type":"mcp","url":"http://librenms-mcp:8000/mcp","path":"","auth_type":"none","key":"","config":{"enable":true},"info":{"name":"LibreNMS MCP","id":"librenms-mcp"}}]'
     ports:
-      - "5000:8080"
+      - "80:8080"
     volumes:
       - open-webui-data:/app/backend/data
     networks:
