@@ -65,8 +65,14 @@ services:
       ENABLE_OAUTH_SIGNUP: "true"
       MICROSOFT_OAUTH_SCOPE: "openid email profile"
       MICROSOFT_REDIRECT_URI: "${WEBUI_URL:?Set WEBUI_URL in the root .env}/oauth/microsoft/callback"
-      # Seeds the FortiOS MCP tool server on first boot (verified on a fresh volume).
-      TOOL_SERVER_CONNECTIONS: '[{"type":"mcp","url":"http://fortios-mcp:8000/mcp","path":"","auth_type":"none","key":"","config":{"enable":true},"info":{"name":"FortiOS MCP","id":"fortios-mcp"}},{"type":"mcp","url":"http://opensearch-mcp:9900/mcp","path":"","auth_type":"none","key":"","config":{"enable":true},"info":{"name":"OpenSearch MCP","id":"opensearch-mcp"}},{"type":"mcp","url":"http://cisco-ise-mcp:5000/mcp","path":"","auth_type":"none","key":"","config":{"enable":true},"info":{"name":"Cisco ISE MCP","id":"cisco-ise-mcp"}},{"type":"mcp","url":"http://cisco-aci-mcp:8000/mcp","path":"","auth_type":"none","key":"","config":{"enable":true},"info":{"name":"Cisco ACI MCP","id":"cisco-aci-mcp"}},{"type":"mcp","url":"http://netbox-mcp:8000/mcp","path":"","auth_type":"none","key":"","config":{"enable":true},"info":{"name":"NetBox MCP","id":"netbox-mcp"}},{"type":"mcp","url":"http://librenms-mcp:8000/mcp","path":"","auth_type":"none","key":"","config":{"enable":true},"info":{"name":"LibreNMS MCP","id":"librenms-mcp"}}]'
+      # Wildcard read grants share the connections with signed-in WebUI users.
+      TOOL_SERVER_CONNECTIONS: &tool-server-connections >-
+        [{"type":"mcp","url":"http://fortios-mcp:8000/mcp","path":"","auth_type":"none","key":"","config":{"enable":true,"access_grants":[{"principal_type":"user","principal_id":"*","permission":"read"}]},"info":{"name":"FortiOS MCP","id":"fortios-mcp"}},
+        {"type":"mcp","url":"http://opensearch-mcp:9900/mcp","path":"","auth_type":"none","key":"","config":{"enable":true,"access_grants":[{"principal_type":"user","principal_id":"*","permission":"read"}]},"info":{"name":"OpenSearch MCP","id":"opensearch-mcp"}},
+        {"type":"mcp","url":"http://cisco-ise-mcp:5000/mcp","path":"","auth_type":"none","key":"","config":{"enable":true,"access_grants":[{"principal_type":"user","principal_id":"*","permission":"read"}]},"info":{"name":"Cisco ISE MCP","id":"cisco-ise-mcp"}},
+        {"type":"mcp","url":"http://cisco-aci-mcp:8000/mcp","path":"","auth_type":"none","key":"","config":{"enable":true,"access_grants":[{"principal_type":"user","principal_id":"*","permission":"read"}]},"info":{"name":"Cisco ACI MCP","id":"cisco-aci-mcp"}},
+        {"type":"mcp","url":"http://netbox-mcp:8000/mcp","path":"","auth_type":"none","key":"","config":{"enable":true,"access_grants":[{"principal_type":"user","principal_id":"*","permission":"read"}]},"info":{"name":"NetBox MCP","id":"netbox-mcp"}},
+        {"type":"mcp","url":"http://librenms-mcp:8000/mcp","path":"","auth_type":"none","key":"","config":{"enable":true,"access_grants":[{"principal_type":"user","principal_id":"*","permission":"read"}]},"info":{"name":"LibreNMS MCP","id":"librenms-mcp"}}]
     ports:
       - "80:8080"
     volumes:
@@ -78,6 +84,7 @@ services:
       - cisco-aci-net
       - netbox-net
       - librenms-net
+      - webui-bootstrap-net
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
@@ -85,6 +92,21 @@ services:
       timeout: 5s
       retries: 3
       start_period: 60s
+
+  copilot-pipe-init:
+    image: network-helper-copilot-webui:local
+    pull_policy: never
+    entrypoint: ["python", "/opt/bootstrap_copilot_pipe.py"]
+    environment:
+      WEBUI_ADMIN_EMAIL: ${WEBUI_ADMIN_EMAIL}
+      WEBUI_ADMIN_PASSWORD: ${WEBUI_ADMIN_PASSWORD}
+      TOOL_SERVER_CONNECTIONS: *tool-server-connections
+    depends_on:
+      open-webui:
+        condition: service_healthy
+    networks:
+      - webui-bootstrap-net
+    restart: "no"
 
   fortios-mcp:
     build: fortigate-mcp
@@ -194,6 +216,8 @@ networks:
   cisco-aci-net:
   netbox-net:
   librenms-net:
+  webui-bootstrap-net:
+    internal: true
 
 volumes:
   open-webui-data:

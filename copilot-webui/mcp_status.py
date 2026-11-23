@@ -2,6 +2,7 @@ import asyncio
 import logging
 import re
 import time
+from http import HTTPStatus
 
 import httpx2
 from mcp.shared.exceptions import MCPError
@@ -17,6 +18,13 @@ SERVER_NAMES = {
     "netbox-mcp": "NetBox",
     "opensearch-mcp": "OpenSearch",
 }
+
+
+class MCPToolResultError(Exception):
+    def __init__(self, summary, detail=None, *, diagnostics=None):
+        super().__init__(detail or summary)
+        self.summary = summary
+        self.diagnostics = diagnostics or {}
 
 
 async def emit_status(emitter, server, message, *, done=False, error=False):
@@ -40,41 +48,69 @@ def status_text(value):
     return " ".join(value[:300].split()) if isinstance(value, str) else ""
 
 
-def error_status(result):
+def error_diagnostics(result):
     data = result.get("structuredContent")
+    diagnostics = {}
     if isinstance(data, dict):
+        for field in ("status_code", "http_status"):
+            code = str(data.get(field))
+            if re.fullmatch(r"[45][0-9]{2}", code):
+                diagnostics["http_status"] = int(code)
+                break
+        diagnostics.update(retry_diagnostics(data.get("retry_after_seconds", data.get("retry_after"))))
         error = data.get("error")
-        status = data.get("status")
-        if error or status == "error" or data.get("success") is False:
-            code = data.get("status_code", data.get("http_status"))
-            if code in (401, 403, "401", "403"):
-                return http_failure(code)
-            return reported_failure(error if isinstance(error, str) else "")
+        if isinstance(error, str):
+            diagnostics = {**text_diagnostics(error[:1000]), **diagnostics}
+    if result.get("isError") and "http_status" not in diagnostics:
+        for item in result.get("content", []):
+            if item.get("type") == "text" and isinstance(item.get("text"), str):
+                diagnostics.update(text_diagnostics(item["text"][:1000]))
+                if "http_status" in diagnostics:
+                    break
+    return diagnostics
+
+
+def retry_diagnostics(value):
+    if type(value) in (str, int) and re.fullmatch(r"[0-9]{1,6}", str(value)):
+        return {"retry_after_seconds": int(value)}
+    return {}
+
+
+def text_diagnostics(text):
+    match = re.search(r"\b(?:HTTP(?: error)?\s+|status(?: code)?[:= ]+)([45][0-9]{2})\b", text, re.IGNORECASE)
+    if match:
+        return {"http_status": int(match[1])}
+    if re.search(r"\b(?:timed out|timeout|(?:connect|read)timeout)\b", text, re.IGNORECASE):
+        return {"upstream_timeout": True}
+    return {}
+
+
+def error_status(result, diagnostics=None):
+    data = result.get("structuredContent")
+    if diagnostics is None:
+        diagnostics = error_diagnostics(result)
+    if "http_status" in diagnostics:
+        return http_failure(diagnostics["http_status"])
+    if diagnostics.get("upstream_timeout"):
+        return "the upstream request timed out; check server reachability"
     if result.get("isError"):
-        text = " ".join(
-            item["text"][:1000]
-            for item in result.get("content", [])
-            if item.get("type") == "text" and isinstance(item.get("text"), str)
-        )
-        return reported_failure(text)
+        return "the MCP server reported a tool error"
+    if isinstance(data, dict) and (data.get("error") or data.get("status") == "error" or data.get("success") is False):
+        return "the MCP server reported a tool error"
     return None
 
 
-def reported_failure(text):
-    match = re.search(r"\b(?:HTTP(?: error)?\s+|status(?: code)?[:= ]+)(401|403)\b", text, re.IGNORECASE)
-    if match:
-        return http_failure(match[1])
-    if re.search(r"\b(?:timed out|timeout|(?:connect|read)timeout)\b", text, re.IGNORECASE):
-        return "the upstream request timed out; check server reachability"
-    return "the MCP server reported a tool error"
-
-
 def http_failure(code):
-    if code in (401, "401"):
+    if code == 401:
         return "authentication failed (HTTP 401); check the configured credentials"
-    if code in (403, "403"):
+    if code == 403:
         return "access denied (HTTP 403); check token expiry and permissions"
-    return "the MCP server reported a tool error"
+    if code == 404:
+        return "the requested endpoint or resource was not found (HTTP 404); this is not a successful search"
+    try:
+        return f"HTTP {code} {HTTPStatus(code).phrase}"
+    except ValueError:
+        return f"HTTP {code}"
 
 
 async def call_with_status(emitter, server, tool, call):

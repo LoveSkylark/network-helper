@@ -114,7 +114,7 @@ docker run --rm --network none -v "$PWD/copilot-webui:/work:ro" -w /work -e PYTH
 
 Open the URL configured in `WEBUI_URL` and sign in with Microsoft or the local admin. For direct remote access, set it to `http://<server-address>`; use the HTTPS URL instead if a reverse proxy terminates TLS.
 
-An administrator must register the Copilot Pipe before selecting a Copilot model. See [open-webui/README.md](./open-webui/README.md). Requests use the shared Copilot account. Selected MCP tool calls require confirmation and can modify network devices; restrict access appropriately.
+Compose registers and enables the Copilot Pipe after Open WebUI is healthy. It uses the local admin credentials from `.env` and leaves any existing `copilot` function unchanged. See [Open WebUI setup and troubleshooting](./open-webui/README.md#github-copilot). Requests use the shared Copilot account. Selected MCP tool calls require confirmation and can modify network devices; restrict access appropriately.
 
 The Entra app registration needs this redirect URI:
 
@@ -122,7 +122,7 @@ The Entra app registration needs this redirect URI:
 <WEBUI_URL>/oauth/microsoft/callback
 ```
 
-`TOOL_SERVER_CONNECTIONS` is applied only when the Open WebUI volume is first created. For an existing volume, add or change tool servers in Settings → Tools, or through the admin API. See [open-webui/README.md](./open-webui/README.md).
+Compose seeds the six bundled MCP connections as **Public** in Open WebUI, meaning signed-in users can use them. The initializer also adds the Public grant to matching connections on existing volumes; it does not add missing connections or publish MCP ports. See [Open WebUI deployment notes](./open-webui/README.md).
 
 ## Adding or changing an MCP service
 

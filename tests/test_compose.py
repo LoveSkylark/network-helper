@@ -103,7 +103,10 @@ class ComposeConfigurationTests(unittest.TestCase):
 
     def test_mcp_services_have_dedicated_webui_networks(self):
         services = self.base["services"]
-        mcp_services = {name: service for name, service in services.items() if name != "open-webui"}
+        mcp_services = {
+            name: service for name, service in services.items()
+            if name not in {"open-webui", "copilot-pipe-init"}
+        }
         self.assertTrue(mcp_services)
         networks = []
         for name, service in mcp_services.items():
@@ -112,11 +115,33 @@ class ComposeConfigurationTests(unittest.TestCase):
                 self.assertEqual(len(attached), 1)
                 networks.extend(attached)
         self.assertEqual(len(networks), len(set(networks)))
-        self.assertEqual(set(services["open-webui"]["networks"]), set(networks))
+        self.assertEqual(set(services["open-webui"]["networks"]) - {"webui-bootstrap-net"}, set(networks))
 
         connections = json.loads(services["open-webui"]["environment"]["TOOL_SERVER_CONNECTIONS"])
         targets = {urlparse(connection["url"]).hostname for connection in connections}
         self.assertEqual(targets, set(mcp_services))
+
+    def test_pipe_initializer_waits_for_webui_on_a_private_network(self):
+        for config in (self.base, self.podman):
+            services = config["services"]
+            init = services["copilot-pipe-init"]
+            self.assertEqual(init["depends_on"]["open-webui"]["condition"], "service_healthy")
+            self.assertEqual(init["image"], services["open-webui"]["image"])
+            self.assertEqual(set(init["networks"]), {"webui-bootstrap-net"})
+            self.assertIn("webui-bootstrap-net", services["open-webui"]["networks"])
+            self.assertTrue(config["networks"]["webui-bootstrap-net"]["internal"])
+
+    def test_bundled_mcp_connections_are_shared_with_signed_in_users(self):
+        for config in (self.base, self.podman):
+            services = config["services"]
+            defaults = services["open-webui"]["environment"]["TOOL_SERVER_CONNECTIONS"]
+            self.assertEqual(services["copilot-pipe-init"]["environment"]["TOOL_SERVER_CONNECTIONS"], defaults)
+            for connection in json.loads(defaults):
+                with self.subTest(server=connection["info"]["id"]):
+                    self.assertEqual(
+                        connection["config"]["access_grants"],
+                        [{"principal_type": "user", "principal_id": "*", "permission": "read"}],
+                    )
 
     def test_podman_override_isolates_each_mcp_network(self):
         services = self.base["services"]
@@ -129,7 +154,7 @@ class ComposeConfigurationTests(unittest.TestCase):
         networks = {
             network
             for name, service in services.items()
-            if name != "open-webui"
+            if name not in {"open-webui", "copilot-pipe-init"}
             for network in service["networks"]
         }
         for network in networks:

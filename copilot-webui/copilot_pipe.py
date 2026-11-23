@@ -9,11 +9,17 @@ import json
 import os
 import tempfile
 
+import httpx2
 from copilot import CopilotClient, RuntimeConnection, ToolSet
 from copilot.tools import Tool, ToolResult
+from mcp.shared.exceptions import MCPError
+from mcp_types import REQUEST_TIMEOUT
 
+from mcp_status import MCPToolResultError, http_failure, retry_diagnostics
 
 COPILOT_SESSION_TIMEOUT_SECONDS = 600
+TOOL_APPROVAL_TIMEOUT_SECONDS = 120
+TOOL_APPROVAL_BATCH_SECONDS = 0.1
 
 
 def _client(state_directory):
@@ -53,7 +59,90 @@ def _messages(body):
     return "\n\n".join(system_messages), json.dumps(conversation, ensure_ascii=False)
 
 
-def _make_tool(name, entry, event_call):
+def _tool_error(result_type, message, **diagnostics):
+    return ToolResult(
+        result_type=result_type,
+        text_result_for_llm=json.dumps({"message": message, **diagnostics}, ensure_ascii=False),
+    )
+
+
+class _ApprovalBatcher:
+    def __init__(self, event_call):
+        self.event_call = event_call
+        self.pending = []
+        self.worker = None
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        if self.worker is not None:
+            self.worker.cancel()
+            try:
+                await self.worker
+            except asyncio.CancelledError:
+                pass
+
+    async def approve(self, name, arguments):
+        if self.event_call is None:
+            return False
+        future = asyncio.get_running_loop().create_future()
+        self.pending.append((name, arguments, future))
+        if self.worker is None:
+            self.worker = asyncio.create_task(self._run())
+        return await future
+
+    async def _run(self):
+        batch = []
+        try:
+            while self.pending:
+                await asyncio.sleep(TOOL_APPROVAL_BATCH_SECONDS)
+                batch, self.pending = self.pending, []
+                batch = [(name, args, future) for name, args, future in batch if not future.done()]
+                if not batch:
+                    continue
+                calls = [{"tool": name, "arguments": args} for name, args, _ in batch]
+                try:
+                    confirmed = await asyncio.wait_for(
+                        self.event_call({
+                            "type": "request:elicitation",
+                            "data": {
+                                "server_name": "Copilot tool approval",
+                                "mode": "form",
+                                "message": (
+                                    f"Submit to allow all {len(calls)} listed tool call(s). "
+                                    "Decline or cancel to reject them all.\n\n"
+                                    + json.dumps(calls, ensure_ascii=True, indent=2)
+                                ),
+                                "requestedSchema": {"type": "object", "properties": {}},
+                            },
+                        }),
+                        timeout=TOOL_APPROVAL_TIMEOUT_SECONDS,
+                    )
+                except asyncio.TimeoutError:
+                    for _, _, future in batch:
+                        if not future.done():
+                            future.set_exception(asyncio.TimeoutError())
+                except Exception as exc:
+                    for _, _, future in batch:
+                        if not future.done():
+                            future.set_exception(exc)
+                else:
+                    for _, _, future in batch:
+                        if not future.done():
+                            future.set_result(
+                                isinstance(confirmed, dict) and confirmed.get("action") == "accept"
+                            )
+                batch = []
+        finally:
+            for _, _, future in batch + self.pending:
+                if not future.done():
+                    future.cancel()
+            self.pending = []
+            self.worker = None
+
+
+def _make_tool(name, entry, approvals):
     spec = entry["spec"]
     invoke = entry["callable"]
 
@@ -64,22 +153,20 @@ def _make_tool(name, entry, event_call):
                 result_type="failure",
                 text_result_for_llm="Tool arguments must be a JSON object.",
             )
-        if event_call is None:
+        try:
+            arguments = json.loads(json.dumps(arguments, ensure_ascii=True, allow_nan=False))
+        except (TypeError, ValueError):
+            return ToolResult(
+                result_type="failure",
+                text_result_for_llm="Tool arguments must be JSON serializable.",
+            )
+        if approvals.event_call is None:
             return ToolResult(
                 result_type="denied",
                 text_result_for_llm="Tool calls require an interactive confirmation.",
             )
         try:
-            confirmed = await asyncio.wait_for(
-                event_call({
-                    "type": "confirmation",
-                    "data": {
-                        "title": f"Allow tool: {name}?",
-                        "message": json.dumps(arguments, ensure_ascii=False, indent=2),
-                    },
-                }),
-                timeout=120,
-            )
+            confirmed = await approvals.approve(name, arguments)
         except asyncio.TimeoutError:
             return ToolResult(
                 result_type="timeout",
@@ -90,7 +177,28 @@ def _make_tool(name, entry, event_call):
                 result_type="denied",
                 text_result_for_llm="Tool call was not approved.",
             )
-        result = await invoke(**arguments)
+        try:
+            result = await invoke(**arguments)
+        except MCPToolResultError as exc:
+            diagnostics = dict(exc.diagnostics)
+            if name == "fortios-mcp_log_query":
+                source = arguments.get("source", "disk")
+                if source in ("disk", "memory", "fortianalyzer", "forticloud"):
+                    diagnostics["log_source"] = source
+            result_type = "timeout" if diagnostics.get("upstream_timeout") else "failure"
+            return _tool_error(result_type, exc.summary, **diagnostics)
+        except (TimeoutError, httpx2.TimeoutException):
+            return _tool_error("timeout", "The MCP request timed out.")
+        except MCPError as exc:
+            if exc.code == REQUEST_TIMEOUT:
+                return _tool_error("timeout", "The MCP request timed out.", mcp_code=exc.code)
+            return _tool_error("failure", "The MCP server returned a protocol error.", mcp_code=exc.code)
+        except httpx2.HTTPStatusError as exc:
+            code = exc.response.status_code
+            return _tool_error(
+                "failure", http_failure(code), http_status=code,
+                **retry_diagnostics(exc.response.headers.get("Retry-After")),
+            )
         return ToolResult(text_result_for_llm=json.dumps(result, ensure_ascii=False, default=str))
 
     return Tool(
@@ -180,8 +288,9 @@ class Pipe:
             for name, entry in (__tools__ or {}).items()
             if entry.get("type") == "mcp"
         }
+        approvals = _ApprovalBatcher(__event_call__)
         definitions = [
-            _make_tool(name, entry, __event_call__)
+            _make_tool(name, entry, approvals)
             for name, entry in selected_tools.items()
         ]
         allowed = ToolSet()
@@ -191,7 +300,12 @@ class Pipe:
         instructions = (
             "The user message contains the conversation as a JSON array. "
             "Use the role labels to interpret the conversation and respond to the "
-            "latest user message."
+            "latest user message. A failed or timed-out tool call is not a successful "
+            "search with no results. For a read-only investigation, if a selected tool "
+            "can answer the question using a different read-only source or method, try "
+            "one relevant alternative with the usual approval. Do not retry the same "
+            "failing request, work around a denial, or use a write operation as a fallback. "
+            "If no suitable alternative is available, explain what could not be verified."
         )
         if system:
             instructions += "\n\n" + system
@@ -203,7 +317,7 @@ class Pipe:
             })
 
         with tempfile.TemporaryDirectory(prefix="copilot-chat-") as state:
-            async with _client(state) as client:
+            async with approvals, _client(state) as client:
                 async with await client.create_session(
                     model=model,
                     system_message={"content": instructions},
