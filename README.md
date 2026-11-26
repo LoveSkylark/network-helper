@@ -28,10 +28,10 @@ flowchart LR
    LibreChat --> Storage[(MongoDB / Meilisearch)]
    LibreChat --> RAG[RAG API]
    RAG --> Vector[(pgvector)]
-   RAG --> Embeddings[Ollama: embeddings]
+   RAG -->|Embeddings| Ollama[Ollama]
 
    LibreChat --> LiteLLM --> Guardrails
-   Guardrails --> Local[Ollama: local chat]
+   Guardrails -->|Local chat| Ollama
    Guardrails --> Adapter[Copilot adapter] --> Copilot
    Guardrails --> Redis[(Redis)]
    LiteLLM --> Postgres[(PostgreSQL: gateway)]
