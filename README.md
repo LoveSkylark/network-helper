@@ -16,6 +16,50 @@ LibreChat is the chat portal. Its OpenAI-compatible endpoint is LiteLLM, which r
 
 Cisco ISE is disabled in the Compose file, so it is not configured as a LibreChat MCP server.
 
+## Architecture
+
+```mermaid
+flowchart LR
+   Users@{ shape: cloud, label: "Users" }
+   Copilot@{ shape: cloud, label: "GitHub Copilot" }
+
+   Users --> Traefik --> LibreChat
+
+   LibreChat --> Storage[(MongoDB / Meilisearch)]
+   LibreChat --> RAG[RAG API]
+   RAG --> Vector[(pgvector)]
+   RAG --> Embeddings[Ollama: embeddings]
+
+   LibreChat --> LiteLLM --> Guardrails
+   Guardrails --> Local[Ollama: local chat]
+   Guardrails --> Adapter[Copilot adapter] --> Copilot
+   Guardrails --> Redis[(Redis)]
+   LiteLLM --> Postgres[(PostgreSQL: gateway)]
+
+   LibreChat --> MCP[MCP servers]
+   MCP --> FortiOS
+   MCP --> OpenSearch
+   MCP --> ACI[Cisco ACI]
+   MCP --> NetBox
+   MCP --> LibreNMS
+
+   classDef users fill:#dcecff,stroke:#2864a5,color:#102a43
+   classDef cloud fill:#e7ddf5,stroke:#69439a,color:#24133a
+   classDef fortios fill:#ffe1dc,stroke:#aa3e31,color:#42130e
+   classDef opensearch fill:#d9f1f0,stroke:#147b79,color:#0a3736
+   classDef aci fill:#dceefa,stroke:#1973a8,color:#103a55
+   classDef netbox fill:#e1f3db,stroke:#4d8138,color:#233c18
+   classDef librenms fill:#fff0c8,stroke:#a97613,color:#503800
+
+   class Users users
+   class Copilot cloud
+   class FortiOS fortios
+   class OpenSearch opensearch
+   class ACI aci
+   class NetBox netbox
+   class LibreNMS librenms
+```
+
 ## Network and tool policy
 
 Each MCP service remains on its own network. LibreChat joins those networks and a client network shared with LiteLLM. The Copilot adapter, Redis, and Presidio are on a separate upstream network that LibreChat cannot reach; only LiteLLM joins both. LiteLLM's PostgreSQL database is on a separate internal network shared only with LiteLLM, independent of the LibreChat RAG database. MCP servers are hidden from ordinary chat and are available through Agents. Across all agents, LibreChat automatically approves FortiOS, Cisco ACI, and LibreNMS catalog searches and the four direct FortiOS retrieval tools. Other calls require approval, including `call_tool`, which can invoke writes.

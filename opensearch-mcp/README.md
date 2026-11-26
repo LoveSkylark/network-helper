@@ -20,9 +20,13 @@ Run these commands from the project root.
 
    | Variable | Meaning |
    | --- | --- |
-   | `OPENSEARCH_URL` | Cluster endpoint, for example `https://opensearch.internal:9200` |
-   | `OPENSEARCH_USERNAME` / `OPENSEARCH_PASSWORD` | Cluster credentials. Use a read-only user while testing. |
+   | `OPENSEARCH_URL` | Cluster API base URL, including any proxy path prefix, for example `https://opensearch.internal/opensearch`. |
+   | `OPENSEARCH_AUTH_MODE` | `basic` (default), `token` for a bearer token, or `api_key` for an OpenSearch API key. |
+   | `OPENSEARCH_USERNAME` / `OPENSEARCH_PASSWORD` | Cluster credentials for `basic` mode. Use a read-only service account. |
+   | `OPENSEARCH_TOKEN` | Bearer token or OpenSearch API key for the selected mode, without the authorization scheme. |
    | `OPENSEARCH_SSL_VERIFY` | `true` to verify the certificate. Set `false` only for a self-signed cluster you trust. |
+
+   For an OpenSearch API key, set `OPENSEARCH_AUTH_MODE=api_key` and `OPENSEARCH_TOKEN` to the key value without the `ApiKey ` prefix. The key ID is not used for authentication. Use `token` mode only for a bearer token. LibreChat forwards the token to the MCP server; API-key mode converts the scheme to `ApiKey` for OpenSearch requests. Scope the key to the required read access. An interactive SAML session is not necessarily a usable API token; confirm the authentication method with your OpenSearch administrator. Tokens are not refreshed automatically. After changing the mode or token, rebuild the MCP image and recreate both LibreChat and the MCP server.
 
 2. Build and start the service:
 
@@ -47,7 +51,7 @@ The connection is already configured in [librechat.yaml](../librechat/librechat.
 
 - Type: MCP (Streamable HTTP)
 - URL: `http://opensearch-mcp:9900/mcp`
-- Auth: none. The server has no authentication. Its port is not published to the host, but containers attached to `opensearch-net` can access it.
+- The MCP endpoint has no access control. Its port is not published to the host, but containers attached to `opensearch-net` can access it. Token headers supply OpenSearch credentials and do not authenticate access to the MCP endpoint itself.
 
 Select the OpenSearch tools in a LibreChat agent and ask a question about an index. Tool calls require approval.
 

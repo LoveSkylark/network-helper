@@ -250,6 +250,19 @@ class ComposeConfigurationTests(unittest.TestCase):
         }
         self.assertEqual(targets, MCP_SERVICES)
 
+    def test_opensearch_auth_configuration(self):
+        for mode in ("basic", "token", "api_key"):
+            config = render_compose(
+                self.runtime,
+                podman_override=False,
+                overrides={"OPENSEARCH_AUTH_MODE": mode, "OPENSEARCH_TOKEN": "test-token"},
+            )
+            services = config["services"]
+            self.assertEqual(services["opensearch-mcp"]["environment"]["OPENSEARCH_AUTH_MODE"], mode)
+            self.assertEqual(services["opensearch-mcp"]["environment"]["OPENSEARCH_TOKEN"], "test-token")
+            self.assertEqual(services["librechat"]["environment"]["OPENSEARCH_TOKEN"], "test-token")
+        self.assertIn('Authorization: "Bearer ${OPENSEARCH_TOKEN}"', LIBRECHAT_CONFIG.read_text())
+
     def test_mcp_approval_policy_defaults_to_review(self):
         config = LIBRECHAT_CONFIG.read_text()
         self.assertEqual(config.count("chatMenu: false"), len(MCP_SERVICES))

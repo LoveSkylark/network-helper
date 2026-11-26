@@ -33,6 +33,8 @@ mcpServers:
   opensearch:
     type: streamable-http
     url: http://opensearch-mcp:9900/mcp
+    headers:
+      Authorization: "Bearer ${OPENSEARCH_TOKEN}"
     chatMenu: false
   cisco-aci:
     type: streamable-http

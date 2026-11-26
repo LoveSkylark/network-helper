@@ -106,6 +106,7 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
       LITELLM_VIRTUAL_KEY: ${LITELLM_VIRTUAL_KEY}
+      OPENSEARCH_TOKEN: ${OPENSEARCH_TOKEN:-}
     labels:
       traefik.enable: "true"
       traefik.docker.network: network-helper-proxy-net
@@ -360,6 +361,8 @@ services:
     image: opensearch-mcp:local
     environment:
       OPENSEARCH_URL: ${OPENSEARCH_URL}
+      OPENSEARCH_AUTH_MODE: ${OPENSEARCH_AUTH_MODE:-basic}
+      OPENSEARCH_TOKEN: ${OPENSEARCH_TOKEN:-}
       OPENSEARCH_USERNAME: ${OPENSEARCH_USERNAME}
       OPENSEARCH_PASSWORD: ${OPENSEARCH_PASSWORD}
       OPENSEARCH_SSL_VERIFY: ${OPENSEARCH_SSL_VERIFY}
