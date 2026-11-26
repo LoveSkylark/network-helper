@@ -6,10 +6,13 @@ Importing its module-level `mcp` object and running it here keeps upstream code 
 
 import os
 
+from fastmcp.server.transforms.search import BM25SearchTransform
+
 from aci_auth import install_token_refresh
 from server import aci_client, mcp
 
 install_token_refresh(aci_client)
+mcp.add_transform(BM25SearchTransform())
 
 mcp.run(
     transport="streamable-http",

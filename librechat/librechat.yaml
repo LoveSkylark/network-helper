@@ -1,0 +1,72 @@
+version: 1.3.17
+cache: true
+
+registration:
+  socialLogins: ["openid"]
+
+interface:
+  customWelcome: "Welcome to Network Helper."
+  mcpServers:
+    use: true
+    create: false
+    share: false
+    public: false
+  agents:
+    use: true
+    create: true
+    share: false
+    public: false
+
+mcpSettings:
+  allowedDomains:
+    - "http://fortios-mcp:8000"
+    - "http://opensearch-mcp:9900"
+    - "http://cisco-aci-mcp:8000"
+    - "http://netbox-mcp:8000"
+    - "http://librenms-mcp:8000"
+
+mcpServers:
+  fortios:
+    type: streamable-http
+    url: http://fortios-mcp:8000/mcp
+    chatMenu: false
+  opensearch:
+    type: streamable-http
+    url: http://opensearch-mcp:9900/mcp
+    chatMenu: false
+  cisco-aci:
+    type: streamable-http
+    url: http://cisco-aci-mcp:8000/mcp
+    chatMenu: false
+  netbox:
+    type: streamable-http
+    url: http://netbox-mcp:8000/mcp
+    chatMenu: false
+  librenms:
+    type: streamable-http
+    url: http://librenms-mcp:8000/mcp
+    chatMenu: false
+
+endpoints:
+  custom:
+    - name: "Network Helper"
+      apiKey: "${LITELLM_VIRTUAL_KEY}"
+      baseURL: "http://litellm:4000/v1"
+      models:
+        default: ["copilot-auto", "local-ollama"]
+        fetch: true
+      titleConvo: true
+      titleModel: "local-ollama"
+      modelDisplayLabel: "Network Helper"
+  agents:
+    toolApproval:
+      enabled: true
+      mode: default
+      allow:
+        - search_tools_mcp_fortios
+        - search_tools_mcp_cisco-aci
+        - search_tools_mcp_librenms
+        - cmdb_list_mcp_fortios
+        - cmdb_get_mcp_fortios
+        - monitor_get_mcp_fortios
+        - log_get_mcp_fortios

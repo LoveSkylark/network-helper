@@ -1,0 +1,38 @@
+model_list:
+  - model_name: copilot-auto
+    litellm_params:
+      model: openai/copilot-auto
+      api_base: http://copilot-adapter:8000/v1
+      api_key: os.environ/COPILOT_ADAPTER_API_KEY
+  - model_name: local-ollama
+    litellm_params:
+      model: openai/${OLLAMA_MODEL}
+      api_base: os.environ/OLLAMA_API_BASE_URL
+      api_key: ollama
+
+guardrails:
+  - guardrail_name: local-only-mcp
+    litellm_params:
+      guardrail: local_only_mcp.LocalOnlyMcpGuardrail
+      mode: pre_call
+      default_on: true
+  - guardrail_name: stable-mask
+    litellm_params:
+      guardrail: stable_mask.StableMask
+      mode: [pre_call, post_call]
+      default_on: true
+  - guardrail_name: presidio-mask
+    litellm_params:
+      guardrail: presidio
+      mode: [pre_call, post_call]
+      default_on: true
+      output_parse_pii: true
+      pii_entities_config:
+        PERSON: MASK
+        EMAIL_ADDRESS: MASK
+        PHONE_NUMBER: MASK
+        CREDIT_CARD: BLOCK
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/DATABASE_URL

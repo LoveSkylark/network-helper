@@ -46,66 +46,293 @@ x-mcp-healthcheck: &mcp-healthcheck
   start_period: 60s
 
 services:
-  open-webui:
-    build: copilot-webui
-    image: network-helper-copilot-webui:local
-    container_name: open-webui
-    environment:
-      WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY}
-      WEBUI_ADMIN_EMAIL: ${WEBUI_ADMIN_EMAIL}
-      WEBUI_ADMIN_NAME: ${WEBUI_ADMIN_NAME}
-      WEBUI_ADMIN_PASSWORD: ${WEBUI_ADMIN_PASSWORD}
-      MICROSOFT_CLIENT_ID: ${MICROSOFT_CLIENT_ID}
-      MICROSOFT_CLIENT_SECRET: ${MICROSOFT_CLIENT_SECRET}
-      MICROSOFT_CLIENT_TENANT_ID: ${MICROSOFT_CLIENT_TENANT_ID}
-      ENABLE_OPENAI_API: "true"
-      COPILOT_GITHUB_TOKEN: ${COPILOT_GITHUB_TOKEN:?Set COPILOT_GITHUB_TOKEN in the root .env}
-      WEBUI_URL: ${WEBUI_URL:?Set WEBUI_URL in the root .env}
-      ENABLE_OAUTH_PERSISTENT_CONFIG: "false"
-      ENABLE_OAUTH_SIGNUP: "true"
-      MICROSOFT_OAUTH_SCOPE: "openid email profile"
-      MICROSOFT_REDIRECT_URI: "${WEBUI_URL:?Set WEBUI_URL in the root .env}/oauth/microsoft/callback"
-      # Wildcard read grants share the connections with signed-in WebUI users.
-      TOOL_SERVER_CONNECTIONS: &tool-server-connections >-
-        [{"type":"mcp","url":"http://fortios-mcp:8000/mcp","path":"","auth_type":"none","key":"","config":{"enable":true,"access_grants":[{"principal_type":"user","principal_id":"*","permission":"read"}]},"info":{"name":"FortiOS MCP","id":"fortios-mcp"}},
-        {"type":"mcp","url":"http://opensearch-mcp:9900/mcp","path":"","auth_type":"none","key":"","config":{"enable":true,"access_grants":[{"principal_type":"user","principal_id":"*","permission":"read"}]},"info":{"name":"OpenSearch MCP","id":"opensearch-mcp"}},
-        {"type":"mcp","url":"http://cisco-ise-mcp:5000/mcp","path":"","auth_type":"none","key":"","config":{"enable":true,"access_grants":[{"principal_type":"user","principal_id":"*","permission":"read"}]},"info":{"name":"Cisco ISE MCP","id":"cisco-ise-mcp"}},
-        {"type":"mcp","url":"http://cisco-aci-mcp:8000/mcp","path":"","auth_type":"none","key":"","config":{"enable":true,"access_grants":[{"principal_type":"user","principal_id":"*","permission":"read"}]},"info":{"name":"Cisco ACI MCP","id":"cisco-aci-mcp"}},
-        {"type":"mcp","url":"http://netbox-mcp:8000/mcp","path":"","auth_type":"none","key":"","config":{"enable":true,"access_grants":[{"principal_type":"user","principal_id":"*","permission":"read"}]},"info":{"name":"NetBox MCP","id":"netbox-mcp"}},
-        {"type":"mcp","url":"http://librenms-mcp:8000/mcp","path":"","auth_type":"none","key":"","config":{"enable":true,"access_grants":[{"principal_type":"user","principal_id":"*","permission":"read"}]},"info":{"name":"LibreNMS MCP","id":"librenms-mcp"}}]
+  traefik:
+    image: traefik:v3.7
+    command:
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.docker.network=network-helper-proxy-net"
+      - "--entrypoints.websecure.address=:443"
+      - "--certificatesresolvers.letsencrypt.acme.email=${TRAEFIK_ACME_EMAIL}"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+      - "--certificatesresolvers.letsencrypt.acme.dnschallenge.provider=acme-dns"
+      - "--certificatesresolvers.letsencrypt.acme.dnschallenge.resolvers=8.8.8.8:53,1.1.1.1:53"
     ports:
-      - "80:8080"
+      - "443:443"
+    environment:
+      ACME_DNS_API_BASE: ${ACME_DNS_API_BASE}
+      ACME_DNS_STORAGE_PATH: /etc/traefik/acme-dns-account.json
     volumes:
-      - open-webui-data:/app/backend/data
+      - type: bind
+        source: ${TRAEFIK_DOCKER_SOCKET}
+        target: /var/run/docker.sock
+        read_only: true
+      - type: bind
+        source: ${ACME_DNS_ACCOUNT_FILE}
+        target: /etc/traefik/acme-dns-account.json
+        read_only: true
+      - traefik-acme-data:/letsencrypt
     networks:
+      - proxy-net
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  librechat:
+    image: ghcr.io/librechat-ai/librechat:v0.8.8
+    container_name: librechat
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "3080"
+      CONFIG_PATH: /app/librechat.yaml
+      MONGO_URI: "mongodb://librechat:${MONGO_ROOT_PASSWORD}@mongodb:27017/LibreChat?authSource=admin"
+      MEILI_HOST: http://meilisearch:7700
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
+      RAG_API_URL: http://rag-api:8000
+      DOMAIN_CLIENT: "https://${LIBRECHAT_HOSTNAME}"
+      DOMAIN_SERVER: "https://${LIBRECHAT_HOSTNAME}"
+      ALLOW_EMAIL_LOGIN: ${ALLOW_EMAIL_LOGIN:-true}
+      ALLOW_REGISTRATION: "false"
+      ALLOW_SOCIAL_LOGIN: ${ALLOW_SOCIAL_LOGIN:-false}
+      OPENID_CLIENT_ID: ${MICROSOFT_CLIENT_ID}
+      OPENID_CLIENT_SECRET: ${MICROSOFT_CLIENT_SECRET}
+      OPENID_ISSUER: "https://login.microsoftonline.com/${MICROSOFT_CLIENT_TENANT_ID}/v2.0"
+      OPENID_SESSION_SECRET: ${OPENID_SESSION_SECRET}
+      OPENID_SCOPE: "openid profile email"
+      OPENID_CALLBACK_URL: /oauth/openid/callback
+      OPENID_BUTTON_LABEL: "Sign in with Microsoft"
+      CREDS_KEY: ${CREDS_KEY}
+      CREDS_IV: ${CREDS_IV}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
+      LITELLM_VIRTUAL_KEY: ${LITELLM_VIRTUAL_KEY}
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: network-helper-proxy-net
+      traefik.http.routers.librechat.rule: "Host(`${LIBRECHAT_HOSTNAME}`)"
+      traefik.http.routers.librechat.entrypoints: websecure
+      traefik.http.routers.librechat.tls: "true"
+      traefik.http.routers.librechat.tls.certresolver: letsencrypt
+      traefik.http.services.librechat.loadbalancer.server.port: "3080"
+    volumes:
+      - ./librechat/librechat.yaml:/app/librechat.yaml:ro
+      - librechat-data:/app/data
+      - librechat-uploads:/app/uploads
+      - librechat-images:/app/client/public/images
+      - librechat-logs:/app/logs
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      meilisearch:
+        condition: service_healthy
+      litellm-key-init:
+        condition: service_completed_successfully
+    networks:
+      - librechat-data-net
+      - proxy-net
+      - gateway-client-net
       - fortios-net
       - opensearch-net
-      - cisco-ise-net
       - cisco-aci-net
       - netbox-net
       - librenms-net
-      - webui-bootstrap-net
+    restart: unless-stopped
+
+  mongodb:
+    image: mongo:8.0.20
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: librechat
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
+    volumes:
+      - mongodb-data:/data/db
+    command: ["mongod", "--auth"]
+    networks:
+      - librechat-data-net
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      test:
+        [
+          "CMD-SHELL",
+          "mongosh --quiet --username \"$${MONGO_INITDB_ROOT_USERNAME}\" --password \"$${MONGO_INITDB_ROOT_PASSWORD}\" --authenticationDatabase admin --eval 'db.adminCommand(\"ping\").ok' | grep -q 1",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  meilisearch:
+    image: getmeili/meilisearch:v1.35.1
+    environment:
+      MEILI_NO_ANALYTICS: "true"
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
+    volumes:
+      - meilisearch-data:/meili_data
+    networks:
+      - librechat-data-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:7700/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  vectordb:
+    image: pgvector/pgvector:0.8.0-pg15-trixie
+    environment:
+      POSTGRES_DB: librechat
+      POSTGRES_USER: librechat
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - rag-postgres-data:/var/lib/postgresql/data
+    networks:
+      - librechat-data-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  rag-api:
+    image: registry.librechat.ai/librechat-ai/librechat-rag-api-dev-lite:latest
+    environment:
+      DB_HOST: vectordb
+      DB_PORT: "5432"
+      POSTGRES_DB: librechat
+      POSTGRES_USER: librechat
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      RAG_PORT: "8000"
+      EMBEDDINGS_PROVIDER: ollama
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL}
+      EMBEDDINGS_MODEL: ${OLLAMA_EMBEDDING_MODEL}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      vectordb:
+        condition: service_healthy
+    networks:
+      - librechat-data-net
+      - ollama-net
+    restart: unless-stopped
+
+  copilot-adapter:
+    build: copilot-adapter
+    image: network-helper-copilot-adapter:local
+    environment:
+      COPILOT_AUTH_MODE: ${COPILOT_AUTH_MODE:-github_app}
+      COPILOT_GITHUB_TOKEN: ${COPILOT_GITHUB_TOKEN:-}
+      COPILOT_APP_ID: ${COPILOT_APP_ID:-}
+      COPILOT_INSTALLATION_ID: ${COPILOT_INSTALLATION_ID:-}
+      COPILOT_APP_PRIVATE_KEY_B64: ${COPILOT_APP_PRIVATE_KEY_B64:-}
+      COPILOT_ADAPTER_API_KEY: ${COPILOT_ADAPTER_API_KEY}
+      ALLOW_COPILOT_MCP: ${ALLOW_COPILOT_MCP:-false}
+    networks:
+      - litellm-upstream-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 60s
+      start_period: 30s
 
-  copilot-pipe-init:
-    image: network-helper-copilot-webui:local
-    pull_policy: never
-    entrypoint: ["python", "/opt/bootstrap_copilot_pipe.py"]
+  redis:
+    image: redis:7.4.2-alpine
     environment:
-      WEBUI_ADMIN_EMAIL: ${WEBUI_ADMIN_EMAIL}
-      WEBUI_ADMIN_PASSWORD: ${WEBUI_ADMIN_PASSWORD}
-      TOOL_SERVER_CONNECTIONS: *tool-server-connections
+      STABLEMASK_REDIS_PASSWORD: ${STABLEMASK_REDIS_PASSWORD}
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${STABLEMASK_REDIS_PASSWORD}"]
+    volumes:
+      - stablemask-redis-data:/data
+    networks:
+      - litellm-upstream-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$${STABLEMASK_REDIS_PASSWORD}\" ping | grep -q PONG"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  presidio-analyzer:
+    image: mcr.microsoft.com/presidio-analyzer:latest
+    networks:
+      - litellm-upstream-net
+    restart: unless-stopped
+
+  presidio-anonymizer:
+    image: mcr.microsoft.com/presidio-anonymizer:latest
+    networks:
+      - litellm-upstream-net
+    restart: unless-stopped
+
+  litellm-db:
+    image: postgres:16.6-alpine
+    environment:
+      POSTGRES_DB: litellm
+      POSTGRES_USER: litellm
+      POSTGRES_PASSWORD: ${LITELLM_DB_PASSWORD}
+    volumes:
+      - litellm-db-data:/var/lib/postgresql/data
+    networks:
+      - litellm-db-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  litellm:
+    build:
+      context: .
+      dockerfile: litellm/Dockerfile
+    image: network-helper-litellm:local
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+      COPILOT_ADAPTER_API_KEY: ${COPILOT_ADAPTER_API_KEY}
+      OLLAMA_MODEL: ${OLLAMA_MODEL}
+      OLLAMA_API_BASE_URL: ${OLLAMA_API_BASE_URL}
+      LOCAL_MODEL_NAME: local-ollama
+      ALLOW_COPILOT_MCP: ${ALLOW_COPILOT_MCP:-false}
+      STABLEMASK_HMAC_KEY: ${STABLEMASK_HMAC_KEY}
+      STABLEMASK_REDIS_URL: "redis://:${STABLEMASK_REDIS_PASSWORD}@redis:6379/0"
+      PRESIDIO_ANALYZER_API_BASE: http://presidio-analyzer:3000
+      PRESIDIO_ANONYMIZER_API_BASE: http://presidio-anonymizer:3000
+      DATABASE_URL: "postgresql://litellm:${LITELLM_DB_PASSWORD}@litellm-db:5432/litellm"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
-      open-webui:
+      copilot-adapter:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      litellm-db:
         condition: service_healthy
     networks:
-      - webui-bootstrap-net
+      - gateway-client-net
+      - litellm-upstream-net
+      - ollama-net
+      - litellm-db-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  litellm-key-init:
+    image: network-helper-litellm:local
+    pull_policy: never
+    entrypoint: ["python", "/app/create_virtual_key.py"]
+    environment:
+      LITELLM_URL: http://litellm:4000
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+      LITELLM_VIRTUAL_KEY: ${LITELLM_VIRTUAL_KEY}
+    depends_on:
+      litellm:
+        condition: service_healthy
+    networks:
+      - gateway-client-net
     restart: "no"
 
   fortios-mcp:
@@ -143,22 +370,22 @@ services:
       <<: *mcp-healthcheck
       test: ["CMD", "python", "-c", *mcp-healthcheck-script, "9900"]
 
-  cisco-ise-mcp:
-    build: cisco-ise-mcp
-    image: cisco-ise-mcp:local
-    environment:
-      ISE_IP: ${ISE_IP}
-      API_USERNAME: ${API_USERNAME}
-      API_PWD: ${API_PWD}
-      ISE_VERIFY_SERVER_CERT: ${ISE_VERIFY_SERVER_CERT}
-      ISE_VERIFY_HOSTNAME: ${ISE_VERIFY_HOSTNAME}
-      DEBUG_MCP: ${DEBUG_MCP}
-    networks:
-      - cisco-ise-net
-    restart: unless-stopped
-    healthcheck:
-      <<: *mcp-healthcheck
-      test: ["CMD", "python", "-c", *mcp-healthcheck-script, "5000"]
+  # cisco-ise-mcp:
+  #   build: cisco-ise-mcp
+  #   image: cisco-ise-mcp:local
+  #   environment:
+  #     ISE_IP: ${ISE_IP}
+  #     API_USERNAME: ${API_USERNAME}
+  #     API_PWD: ${API_PWD}
+  #     ISE_VERIFY_SERVER_CERT: ${ISE_VERIFY_SERVER_CERT}
+  #     ISE_VERIFY_HOSTNAME: ${ISE_VERIFY_HOSTNAME}
+  #     DEBUG_MCP: ${DEBUG_MCP}
+  #   networks:
+  #     - cisco-ise-net
+  #   restart: unless-stopped
+  #   healthcheck:
+  #     <<: *mcp-healthcheck
+  #     test: ["CMD", "python", "-c", *mcp-healthcheck-script, "5000"]
 
   cisco-aci-mcp:
     build: cisco-aci-mcp
@@ -199,6 +426,7 @@ services:
       LIBRENMS_TOKEN: ${LIBRENMS_TOKEN}
       LIBRENMS_VERIFY_SSL: ${LIBRENMS_VERIFY_SSL}
       READ_ONLY_MODE: "true"
+      TOOL_SEARCH_ENABLED: "true"
       MCP_TRANSPORT: "http"
       MCP_HTTP_HOST: "0.0.0.0"
       MCP_HTTP_PORT: "8000"
@@ -210,14 +438,30 @@ services:
       test: ["CMD", "python", "-c", *mcp-healthcheck-script, "8000"]
 
 networks:
+  librechat-data-net:
+    internal: true
+  proxy-net:
+    name: network-helper-proxy-net
+  gateway-client-net:
+  litellm-upstream-net:
+  ollama-net:
+  litellm-db-net:
+    internal: true
   fortios-net:
   opensearch-net:
   cisco-ise-net:
   cisco-aci-net:
   netbox-net:
   librenms-net:
-  webui-bootstrap-net:
-    internal: true
 
 volumes:
-  open-webui-data:
+  traefik-acme-data:
+  librechat-data:
+  librechat-uploads:
+  librechat-images:
+  librechat-logs:
+  mongodb-data:
+  meilisearch-data:
+  rag-postgres-data:
+  litellm-db-data:
+  stablemask-redis-data:

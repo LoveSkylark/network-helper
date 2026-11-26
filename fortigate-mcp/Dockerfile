@@ -21,6 +21,7 @@ ENV UV_PYTHON_DOWNLOADS=never \
     UV_LINK_MODE=copy
 
 RUN uv sync --locked --no-dev --no-install-project
+RUN uv pip install --python /app/.venv/bin/python fastmcp==3.2.2
 
 FROM python:3.13-slim-bookworm AS runtime
 
@@ -37,7 +38,8 @@ WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder /app/server.py /app/fortios_client.py /app/LICENSE ./
 COPY --from=builder /app/tools/ ./tools/
+COPY http_entrypoint.py /app/http_entrypoint.py
 
 USER mcp
 EXPOSE 8000
-ENTRYPOINT ["python", "server.py"]
+ENTRYPOINT ["python", "http_entrypoint.py"]

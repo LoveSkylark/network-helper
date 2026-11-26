@@ -11,8 +11,17 @@ from urllib.parse import urlparse
 ROOT = Path(__file__).resolve().parent.parent
 COMPOSE_FILES = (ROOT / "compose.yaml", ROOT / "compose.podman.yaml")
 EXAMPLE_ENV = ROOT / ".env.example"
+LIBRECHAT_CONFIG = ROOT / "librechat" / "librechat.yaml"
+LITELLM_CONFIG = ROOT / "litellm" / "config.yaml"
 VARIABLE = re.compile(r"(?<!\$)\$(?:\{([A-Za-z_][A-Za-z0-9_]*)[^}]*\}|([A-Za-z_][A-Za-z0-9_]*))")
 ENV_KEY = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=", re.MULTILINE)
+MCP_SERVICES = {
+    "fortios-mcp",
+    "opensearch-mcp",
+    "cisco-aci-mcp",
+    "netbox-mcp",
+    "librenms-mcp",
+}
 
 
 def referenced_variables():
@@ -69,81 +78,210 @@ class ComposeConfigurationTests(unittest.TestCase):
         provided = set(ENV_KEY.findall(EXAMPLE_ENV.read_text()))
         self.assertEqual(referenced_variables() - provided, set())
 
-    def test_compose_uses_example_webui_url(self):
-        values = dict(
-            line.split("=", 1)
-            for line in EXAMPLE_ENV.read_text().splitlines()
-            if line.startswith("WEBUI_URL=")
+    def test_librechat_urls_follow_hostname(self):
+        config = render_compose(
+            self.runtime,
+            podman_override=False,
+            overrides={
+                "LIBRECHAT_HOSTNAME": "portal.example.test",
+                "DOMAIN_CLIENT": "https://old-client.example.test",
+                "DOMAIN_SERVER": "https://old-server.example.test",
+            },
         )
-        url = values["WEBUI_URL"]
-        environment = self.base["services"]["open-webui"]["environment"]
-        self.assertEqual(environment["WEBUI_URL"], url)
-        self.assertEqual(environment["MICROSOFT_REDIRECT_URI"], f"{url}/oauth/microsoft/callback")
+        service = config["services"]["librechat"]
+        self.assertEqual(service["environment"]["DOMAIN_CLIENT"], "https://portal.example.test")
+        self.assertEqual(service["environment"]["DOMAIN_SERVER"], "https://portal.example.test")
+        self.assertEqual(
+            service["labels"]["traefik.http.routers.librechat.rule"],
+            "Host(`portal.example.test`)",
+        )
 
-    def test_only_webui_publishes_port_80(self):
+    def test_local_login_is_enabled_without_public_registration(self):
+        environment = self.base["services"]["librechat"]["environment"]
+        self.assertEqual(environment["ALLOW_EMAIL_LOGIN"], "true")
+        self.assertEqual(environment["ALLOW_REGISTRATION"], "false")
+        self.assertEqual(environment["ALLOW_SOCIAL_LOGIN"], "false")
+
+        config = render_compose(
+            self.runtime,
+            podman_override=False,
+            overrides={"ALLOW_EMAIL_LOGIN": "false", "ALLOW_SOCIAL_LOGIN": "true"},
+        )
+        environment = config["services"]["librechat"]["environment"]
+        self.assertEqual(environment["ALLOW_EMAIL_LOGIN"], "false")
+        self.assertEqual(environment["ALLOW_SOCIAL_LOGIN"], "true")
+        self.assertEqual(environment["ALLOW_REGISTRATION"], "false")
+
+    def test_internal_database_identities_are_consistent(self):
+        config = render_compose(
+            self.runtime,
+            podman_override=False,
+            overrides={
+                "MONGO_ROOT_USERNAME": "old-user",
+                "POSTGRES_USER": "old-user",
+                "POSTGRES_DB": "old-db",
+            },
+        )
+        services = config["services"]
+        self.assertEqual(
+            services["mongodb"]["environment"]["MONGO_INITDB_ROOT_USERNAME"], "librechat"
+        )
+        self.assertTrue(
+            services["librechat"]["environment"]["MONGO_URI"].startswith("mongodb://librechat:")
+        )
+        for service in ("vectordb", "rag-api"):
+            with self.subTest(service=service):
+                environment = services[service]["environment"]
+                self.assertEqual(environment["POSTGRES_USER"], "librechat")
+                self.assertEqual(environment["POSTGRES_DB"], "librechat")
+
+    def test_only_traefik_publishes_port_443(self):
         services = self.base["services"]
         published = {
             name: service["ports"]
             for name, service in services.items()
             if service.get("ports")
         }
-        self.assertEqual(set(published), {"open-webui"})
-        self.assertEqual(len(published["open-webui"]), 1)
-        port = published["open-webui"][0]
-        self.assertEqual(str(port["published"]), "80")
-        self.assertEqual(port["target"], 8080)
-        self.assertIn(port.get("host_ip", ""), ("", "0.0.0.0", "::"))
-        self.assertEqual(port.get("protocol", "tcp"), "tcp")
+        self.assertEqual(set(published), {"traefik"})
+        self.assertEqual(len(published["traefik"]), 1)
+        port = published["traefik"][0]
+        self.assertEqual(str(port["published"]), "443")
+        self.assertEqual(port["target"], 443)
 
-    def test_mcp_network_subnets_are_allocated_by_runtime(self):
-        for config in (self.base, self.podman):
-            for name, network in config["networks"].items():
-                with self.subTest(network=name):
-                    self.assertFalse(network.get("ipam", {}).get("config"))
-
-    def test_mcp_services_have_dedicated_webui_networks(self):
+    def test_traefik_routes_librechat_with_tls(self):
         services = self.base["services"]
-        mcp_services = {
-            name: service for name, service in services.items()
-            if name not in {"open-webui", "copilot-pipe-init"}
-        }
-        self.assertTrue(mcp_services)
+        traefik = services["traefik"]
+        librechat = services["librechat"]
+        self.assertFalse(librechat.get("ports"))
+        self.assertEqual(set(traefik["networks"]), {"proxy-net"})
+        self.assertIn("proxy-net", librechat["networks"])
+        self.assertEqual(
+            self.base["networks"]["proxy-net"]["name"],
+            "network-helper-proxy-net",
+        )
+        self.assertIn(
+            "--certificatesresolvers.letsencrypt.acme.dnschallenge.provider=acme-dns",
+            traefik["command"],
+        )
+        self.assertTrue(
+            any(
+                argument.startswith("--certificatesresolvers.letsencrypt.acme.email=")
+                for argument in traefik["command"]
+            )
+        )
+        self.assertEqual(
+            librechat["labels"]["traefik.http.routers.librechat.tls"],
+            "true",
+        )
+        self.assertEqual(
+            librechat["labels"]["traefik.http.routers.librechat.tls.certresolver"],
+            "letsencrypt",
+        )
+        self.assertEqual(
+            traefik["environment"]["ACME_DNS_STORAGE_PATH"],
+            "/etc/traefik/acme-dns-account.json",
+        )
+        self.assertTrue(
+            any(
+                mount.get("target") == "/etc/traefik/acme-dns-account.json"
+                and mount.get("read_only")
+                for mount in traefik["volumes"]
+            )
+        )
+        self.assertEqual(
+            librechat["labels"]["traefik.http.routers.librechat.rule"],
+            "Host(`chat.example.com`)",
+        )
+
+    def test_mcp_services_keep_dedicated_private_networks(self):
+        services = self.base["services"]
         networks = []
-        for name, service in mcp_services.items():
+        for name in MCP_SERVICES:
             with self.subTest(service=name):
-                attached = set(service.get("networks", {}))
+                attached = set(services[name].get("networks", {}))
                 self.assertEqual(len(attached), 1)
                 networks.extend(attached)
         self.assertEqual(len(networks), len(set(networks)))
-        self.assertEqual(set(services["open-webui"]["networks"]) - {"webui-bootstrap-net"}, set(networks))
+        self.assertEqual(set(services["librechat"]["networks"]) & set(networks), set(networks))
+        self.assertNotIn("cisco-ise-mcp", services)
+        self.assertTrue(set(services["litellm"]["networks"]).isdisjoint(networks))
 
-        connections = json.loads(services["open-webui"]["environment"]["TOOL_SERVER_CONNECTIONS"])
-        targets = {urlparse(connection["url"]).hostname for connection in connections}
-        self.assertEqual(targets, set(mcp_services))
+    def test_librenms_tool_search_preserves_read_only_mode(self):
+        environment = self.base["services"]["librenms-mcp"]["environment"]
+        self.assertEqual(environment["READ_ONLY_MODE"], "true")
+        self.assertEqual(environment["TOOL_SEARCH_ENABLED"], "true")
 
-    def test_pipe_initializer_waits_for_webui_on_a_private_network(self):
-        for config in (self.base, self.podman):
-            services = config["services"]
-            init = services["copilot-pipe-init"]
-            self.assertEqual(init["depends_on"]["open-webui"]["condition"], "service_healthy")
-            self.assertEqual(init["image"], services["open-webui"]["image"])
-            self.assertEqual(set(init["networks"]), {"webui-bootstrap-net"})
-            self.assertIn("webui-bootstrap-net", services["open-webui"]["networks"])
-            self.assertTrue(config["networks"]["webui-bootstrap-net"]["internal"])
+    def test_librechat_cannot_reach_the_copilot_adapter_directly(self):
+        services = self.base["services"]
+        librechat_networks = set(services["librechat"]["networks"])
+        adapter_networks = set(services["copilot-adapter"]["networks"])
+        gateway_networks = set(services["litellm"]["networks"])
+        self.assertTrue(librechat_networks.isdisjoint(adapter_networks))
+        self.assertIn("gateway-client-net", librechat_networks & gateway_networks)
+        self.assertIn("litellm-upstream-net", adapter_networks & gateway_networks)
+        self.assertNotIn("ollama-net", librechat_networks)
+        database_network = set(services["litellm-db"]["networks"])
+        self.assertEqual(database_network, {"litellm-db-net"})
+        self.assertTrue(self.base["networks"]["litellm-db-net"]["internal"])
+        self.assertEqual(
+            {
+                name
+                for name, service in services.items()
+                if "litellm-db-net" in service.get("networks", {})
+            },
+            {"litellm", "litellm-db"},
+        )
 
-    def test_bundled_mcp_connections_are_shared_with_signed_in_users(self):
-        for config in (self.base, self.podman):
-            services = config["services"]
-            defaults = services["open-webui"]["environment"]["TOOL_SERVER_CONNECTIONS"]
-            self.assertEqual(services["copilot-pipe-init"]["environment"]["TOOL_SERVER_CONNECTIONS"], defaults)
-            for connection in json.loads(defaults):
-                with self.subTest(server=connection["info"]["id"]):
-                    self.assertEqual(
-                        connection["config"]["access_grants"],
-                        [{"principal_type": "user", "principal_id": "*", "permission": "read"}],
-                    )
+    def test_librechat_mcp_targets_match_active_services(self):
+        targets = {
+            urlparse(url).hostname
+            for url in re.findall(r"^\s+url:\s+(http://\S+)", LIBRECHAT_CONFIG.read_text(), re.M)
+        }
+        self.assertEqual(targets, MCP_SERVICES)
 
-    def test_podman_override_isolates_each_mcp_network(self):
+    def test_mcp_approval_policy_defaults_to_review(self):
+        config = LIBRECHAT_CONFIG.read_text()
+        self.assertEqual(config.count("chatMenu: false"), len(MCP_SERVICES))
+        policy = re.search(
+            r"(?ms)^    toolApproval:\n(?P<body>(?:^      .*\n)*)", config
+        )
+        self.assertIsNotNone(policy)
+        body = policy.group("body")
+        self.assertIn("      enabled: true\n", body)
+        self.assertIn("      mode: default\n", body)
+        self.assertNotRegex(body, r"(?m)^      (?:ask|deny):")
+        self.assertEqual(set(re.findall(r"(?m)^        - (\S+)$", body)), {
+            "search_tools_mcp_fortios",
+            "search_tools_mcp_cisco-aci",
+            "search_tools_mcp_librenms",
+            "cmdb_list_mcp_fortios",
+            "cmdb_get_mcp_fortios",
+            "monitor_get_mcp_fortios",
+            "log_get_mcp_fortios",
+        })
+
+    def test_litellm_blocks_cloud_tool_calls_and_routes_local_model(self):
+        config = LITELLM_CONFIG.read_text()
+        self.assertIn("model_name: copilot-auto", config)
+        self.assertIn("model_name: local-ollama", config)
+        self.assertIn("guardrail: local_only_mcp.LocalOnlyMcpGuardrail", config)
+        self.assertIn("default_on: true", config)
+        services = self.base["services"]
+        self.assertEqual(services["litellm"]["environment"]["ALLOW_COPILOT_MCP"], "false")
+        self.assertEqual(services["copilot-adapter"]["environment"]["ALLOW_COPILOT_MCP"], "false")
+
+    def test_example_environment_uses_separate_litellm_keys(self):
+        services = self.base["services"]
+        self.assertNotEqual(
+            services["litellm"]["environment"]["LITELLM_MASTER_KEY"],
+            services["librechat"]["environment"]["LITELLM_VIRTUAL_KEY"],
+        )
+        self.assertEqual(
+            services["litellm-key-init"]["environment"]["LITELLM_VIRTUAL_KEY"],
+            services["librechat"]["environment"]["LITELLM_VIRTUAL_KEY"],
+        )
+
+    def test_podman_override_preserves_services_and_isolates_mcp_networks(self):
         services = self.base["services"]
         self.assertEqual(set(self.podman["services"]), set(services))
         for name, service in services.items():
@@ -151,19 +289,15 @@ class ComposeConfigurationTests(unittest.TestCase):
                 overridden = self.podman["services"][name]
                 self.assertEqual(set(overridden["networks"]), set(service["networks"]))
                 self.assertEqual(overridden.get("ports"), service.get("ports"))
-        networks = {
-            network
-            for name, service in services.items()
-            if name not in {"open-webui", "copilot-pipe-init"}
-            for network in service["networks"]
-        }
-        for network in networks:
+
+        for name in MCP_SERVICES:
+            network = next(iter(services[name]["networks"]))
             with self.subTest(network=network):
-                base = self.base["networks"][network]
-                isolated = self.podman["networks"][network]
-                self.assertNotIn("isolate", base.get("driver_opts", {}))
-                self.assertEqual(str(isolated["driver_opts"]["isolate"]), "1")
-                self.assertFalse(isolated.get("internal", False))
+                base_network = self.base["networks"][network]
+                isolated_network = self.podman["networks"][network]
+                self.assertNotIn("isolate", base_network.get("driver_opts", {}))
+                self.assertEqual(str(isolated_network["driver_opts"]["isolate"]), "1")
+                self.assertFalse(isolated_network.get("internal", False))
 
 
 if __name__ == "__main__":

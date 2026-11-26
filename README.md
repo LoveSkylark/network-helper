@@ -1,144 +1,125 @@
-# MCP cluster
+# Network Helper MCP cluster
 
-Open WebUI is the front end, with several MCP services behind it. A Copilot SDK Pipe supplies the chat models, and Open WebUI uses the MCP services as tools. Everything starts from one compose file in this folder.
+LibreChat is the chat portal. Its OpenAI-compatible endpoint is LiteLLM, which routes requests to GitHub Copilot or the existing Ollama service. Presidio and the stable-mask guardrail run in LiteLLM before cloud requests leave the network. The MCP services remain separate and are only reachable by LibreChat.
 
-## Services
+| Service | Host port | Purpose |
+|---|---:|---|
+| Traefik | 443 | HTTPS ingress and automatic Let's Encrypt certificates |
+| LibreChat | internal | Chat UI, local or Microsoft Entra sign-in, and MCP client |
+| LiteLLM | not published | Model routing, PII masking, MCP policy, and virtual keys |
+| Copilot adapter | not published | OpenAI-compatible bridge to the official Copilot SDK |
+| MongoDB, Meilisearch, RAG API, pgvector | not published | LibreChat accounts, chat search, and document search |
+| LiteLLM PostgreSQL | not published | Virtual-key and gateway state |
+| Redis, Presidio analyzer/anonymizer | not published | Stable-mask token storage and PII detection |
+| Ollama | external | Local chat and embedding models |
+| FortiOS, OpenSearch, Cisco ACI, NetBox, LibreNMS | not published | Internal MCP tools |
 
-| Service | Folder | Host port | Container port | Purpose |
-|---|---|---|---|---|
-| open-webui | `copilot-webui/` | 80 | 8080 | Chat UI, Copilot SDK, and Microsoft sign-in |
-| fortios-mcp | `fortigate-mcp/` | not published | 8000 | FortiGate / FortiOS tools |
-| opensearch-mcp | `opensearch-mcp/` | not published | 9900 | OpenSearch tools |
-| cisco-ise-mcp | `cisco-ise-mcp/` | not published | 5000 | Cisco ISE tools |
-| cisco-aci-mcp | `cisco-aci-mcp/` | not published | 8000 | Cisco ACI tools |
-| netbox-mcp | `netbox-mcp/` | not published | 8000 | NetBox tools (read-only) |
-| librenms-mcp | `librenms-mcp/` | not published | 8000 | LibreNMS tools (read-only by default) |
+Cisco ISE is disabled in the Compose file, so it is not configured as a LibreChat MCP server.
 
-The LibreNMS MCP exits at startup until `LIBRENMS_TOKEN` is set in `.env`. Its `READ_ONLY_MODE` is `true` in compose, so it can't make write calls.
+## Network and tool policy
 
-Only Open WebUI publishes a host port, `80`, on all interfaces. Restrict access with a firewall and use HTTPS through a reverse proxy for remote access; the published port itself serves HTTP.
+Each MCP service remains on its own network. LibreChat joins those networks and a client network shared with LiteLLM. The Copilot adapter, Redis, and Presidio are on a separate upstream network that LibreChat cannot reach; only LiteLLM joins both. LiteLLM's PostgreSQL database is on a separate internal network shared only with LiteLLM, independent of the LibreChat RAG database. MCP servers are hidden from ordinary chat and are available through Agents. Across all agents, LibreChat automatically approves FortiOS, Cisco ACI, and LibreNMS catalog searches and the four direct FortiOS retrieval tools. Other calls require approval, including `call_tool`, which can invoke writes.
 
-Each MCP service has its own bridge network shared with Open WebUI, which connects by service name (for example `http://fortios-mcp:8000/mcp`). MCP services do not share a Compose network with each other, and their ports are not published to the host. For Podman, use the commands below with [compose.podman.yaml](./compose.podman.yaml): its `isolate` setting blocks direct traffic between these networks. Docker users use the base Compose file and should verify their host firewall enforces bridge-network isolation. The networks allow outbound access to integrations and do not replace host and network firewall rules. Open WebUI's `TOOL_SERVER_CONNECTIONS` in [compose.yaml](./compose.yaml) lists the MCP endpoints.
+The shared MCP catalog is compact for both LibreChat and Open WebUI. FortiOS exposes generic CMDB, monitor, and log retrieval tools, plus `search_tools` and `call_tool` for its full catalog. Cisco ACI and LibreNMS also use `search_tools` and `call_tool`: search for an operation, then invoke it with the returned name and arguments. LibreNMS remains in read-only mode; FortiOS and ACI search can find write operations. OpenSearch and NetBox retain their existing tools. This reduces tool definitions sent to the model, but requires a model that can search and call tools in multiple steps.
 
-The container runtime allocates the bridge subnets. Configure its address pools so they do not overlap local, VPN, or remote integration networks. Changing a runtime's address pools does not move existing networks: recreate the affected networks and their attached containers to apply the new ranges. Docker's default bridge is configured separately from its default address pools; Podman has its own network configuration.
+By default, LiteLLM and the Copilot adapter reject Copilot requests containing tools or tool results. To allow Copilot to use MCP, explicitly set `ALLOW_COPILOT_MCP=true` in `.env` and recreate LiteLLM and the Copilot adapter. Tool definitions, arguments, and results can then be sent to GitHub Copilot; the configured masking guardrails are not a guarantee that all sensitive network information is removed. Other cloud models remain blocked from MCP. The local Ollama model can use MCP without this opt-in.
 
-## Layout
+Cloud model requests pass through the Presidio and stable-mask guardrails. Names, email addresses, and phone numbers are masked; credit-card detections are blocked. IP addresses use stable HMAC-derived placeholders stored in authenticated Redis, so the same address maps to the same placeholder across requests. Treat the HMAC and Redis secrets as durable data keys and back up Redis with the databases.
 
-```
-compose.yaml          Cluster definition
-compose.podman.yaml   Podman bridge-network isolation override
-.env                  All configuration and secrets for every container
-open-webui/           Open WebUI deployment notes
-copilot-webui/        Open WebUI image with the Copilot SDK Pipe
-fortigate-mcp/        FortiOS MCP build (pinned upstream)
-opensearch-mcp/       OpenSearch MCP build (pinned PyPI package)
-cisco-ise-mcp/        Cisco ISE MCP build (pinned upstream)
-cisco-aci-mcp/        Cisco ACI MCP build (pinned upstream + HTTP wrapper)
-netbox-mcp/           NetBox MCP build (pinned upstream, read-only)
-librenms-mcp/         LibreNMS MCP build (pinned upstream, read-only by default)
-```
+## Setup
 
-## Configuration
+1. Copy the template if `.env` does not already exist. If you have an existing `.env`, update it carefully rather than overwriting it:
 
-From the project root, copy the template if you do not already have a root `.env`:
+   ```sh
+   cp .env.example .env
+   ```
+
+2. Replace the placeholders needed by your selected authentication mode in `.env`. Generate independent secrets with `openssl rand -hex 32`; use 16 random bytes for `CREDS_IV`. Keep the `.env` file private.
+   The internal MongoDB and RAG PostgreSQL users and RAG database are fixed to `librechat` in Compose. Existing `.env` entries `MONGO_ROOT_USERNAME`, `POSTGRES_USER`, and `POSTGRES_DB` are ignored. If reusing database volumes created with different values, migrate their users/database before starting; initialization settings do not rename existing data. External service usernames must still match those systems.
+3. Configure Copilot authentication. For individual testing, set `COPILOT_AUTH_MODE=token` and `COPILOT_GITHUB_TOKEN` to your existing valid GitHub token in `.env`. This mode uses one person's identity and is not appropriate for a shared portal; check your GitHub terms and organization policy. The token must be valid for Copilot; classic `ghp_` personal access tokens are not supported by the Copilot SDK.
+
+   For organization-billed use, set `COPILOT_AUTH_MODE=github_app` and configure the GitHub App:
+   - Grant the organization-level **Copilot Requests** permission as read-only.
+   - Install the app in the organization that should be billed.
+   - Enable GitHub App installation authentication for Copilot in that organization.
+   - Set its app ID and installation ID in `.env`; base64-encode its complete PEM private key into `COPILOT_APP_PRIVATE_KEY_B64` (for example, `base64 -w 0 private-key.pem`).
+
+   The adapter mints and refreshes one-hour installation tokens automatically. Copilot usage is attributed and billed to the GitHub organization. See the [GitHub App setup guide](copilot-adapter/GITHUB_APP.md).
+4. Configure HTTPS ingress: set `LIBRECHAT_HOSTNAME` to a public DNS name pointing to this host and set `TRAEFIK_ACME_EMAIL`. Compose derives both LibreChat URLs as `https://<hostname>`; any existing `DOMAIN_CLIENT` and `DOMAIN_SERVER` entries in `.env` are ignored. Set `ACME_DNS_API_BASE` and `ACME_DNS_ACCOUNT_FILE`, then generate the ACME-DNS account file (do not commit it):
+
+   ```sh
+   python3 scripts/register_acme_dns.py \
+     --domain chat.example.com \
+     --server-url https://auth.example.com \
+     --output /data/certs/acme-dns-account.chat.example.com.json
+   ```
+
+   Replace the example values above with the ones set in `.env`. The command sends a registration request to the ACME-DNS server and stores its response as a domain-keyed JSON file with mode `0600`. Have your DNS administrator create the `_acme-challenge.<hostname>` CNAME pointing to the generated `fulldomain`; DNS-provider changes are outside this Compose setup. Allow inbound TCP port 443. Traefik uses the Let's Encrypt DNS-01 challenge with recursive resolvers `8.8.8.8` and `1.1.1.1` and persists certificates in its named volume; HTTP port 80 is not published. Traefik's propagation checks may also require access to authoritative DNS servers.
+5. Local email/password login is enabled by default; public email registration stays disabled. Once LibreChat is running, create a local account interactively:
+
+   ```sh
+   docker compose exec librechat npm run create-user
+   ```
+
+   Use a strong password; the script displays typed input in the terminal, so keep the screen private. To enable Microsoft Entra later, configure the OIDC settings, register `https://<LIBRECHAT_HOSTNAME>/oauth/openid/callback` as the redirect URI, and set `ALLOW_SOCIAL_LOGIN=true`. Set `ALLOW_EMAIL_LOGIN=false` if local login should then be disabled. Recreate LibreChat to apply changes.
+6. Point `OLLAMA_BASE_URL` and `OLLAMA_API_BASE_URL` at the Ollama service already available to your network. This repository does not start an Ollama container. The example uses `qwen3-coder:latest` for chat and `nomic-embed-text` for RAG embeddings; pull them on the Ollama host if needed.
+
+The LibreChat endpoints use a LiteLLM virtual key, separate from the gateway master key. `litellm-key-init` creates that restricted key automatically and stops if an existing key has unexpected model permissions.
+
+## Start
+
+Ensure TCP port 443 is available and the configured public hostname resolves to this host. For Podman, set `TRAEFIK_DOCKER_SOCKET` to the running Docker-compatible Podman socket.
+
+For the pilot, do not run `docker compose down --remove-orphans`: the existing Open WebUI container is an orphan in this Compose project, and that option would remove it. A normal `up` leaves it running.
 
 ```sh
-cp .env.example .env
+docker compose up -d --build
+docker compose ps
+docker compose logs -f traefik librechat litellm copilot-adapter
 ```
 
-Set the values for the integrations you use. Compose reads this root `.env` for variable substitution; service-local `.env` files are not loaded by the cluster compose file. The root `.gitignore` excludes `.env`; do not commit it.
-
-Things to set before first use:
-
-- **Open WebUI:** `WEBUI_URL` (the externally reachable URL without a trailing slash), `WEBUI_SECRET_KEY` (generate with `openssl rand -hex 32`), the local admin (`WEBUI_ADMIN_*`), and the Microsoft Entra values (`MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`, `MICROSOFT_CLIENT_TENANT_ID`).
-- **GitHub Copilot:** `COPILOT_GITHUB_TOKEN`, a personal fine-grained token with the Copilot Requests account permission. The token's account must have Copilot access.
-- **FortiOS:** `FORTIOS_HOST`, `FORTIOS_API_TOKEN`, `FORTIOS_VDOM`, `FORTIOS_VERIFY_SSL`.
-- **OpenSearch:** `OPENSEARCH_URL`, `OPENSEARCH_USERNAME`, `OPENSEARCH_PASSWORD`, `OPENSEARCH_SSL_VERIFY`.
-- **Cisco ISE:** `ISE_IP`, `API_USERNAME`, `API_PWD`, certificate verification flags.
-- **Cisco ACI:** `APIC_URL`, `ACI_USERNAME`, `ACI_PASSWORD`. These map to the `USERNAME` and `PASSWORD` variables the upstream server reads.
-- **NetBox:** `NETBOX_URL`, `NETBOX_TOKEN`, `NETBOX_VERIFY_SSL`.
-- **LibreNMS:** `LIBRENMS_URL`, `LIBRENMS_TOKEN`, `LIBRENMS_VERIFY_SSL`.
-
-Variable names are unique across services, except the Cisco ACI credentials, which are prefixed with `ACI_` to avoid clashing with generic names.
-
-Changing `.env` needs a container recreate, not a rebuild:
-
-```sh
-podman compose -f compose.yaml -f compose.podman.yaml up -d --force-recreate
-```
-
-## Start the cluster
+For Podman, use both Compose files for each command:
 
 ```sh
 podman compose -f compose.yaml -f compose.podman.yaml up -d --build
 ```
 
-For Docker, use `docker compose up -d --build` instead; do not apply the Podman override. Always include both `-f` options when using Podman Compose.
+Check `docker compose logs litellm-key-init` if LibreChat cannot authenticate to the model gateway. LibreChat chat history is stored in its own named volumes; Open WebUI history is not migrated.
 
-Compose no longer forces an architecture. On Apple Silicon Podman VMs, native ARM builds of `cisco-aci-mcp` and `open-webui` previously crashed with SIGILL in `cryptography`; verify they start successfully in your environment.
+## Validation
 
-Check status and health:
-
-```sh
-podman ps
-curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1/health
-```
-
-MCP healthchecks initialize the local MCP endpoint and close any session created by the check. They verify the MCP server responds, not that its upstream network service or credentials work. A healthcheck reporting `unhealthy` does not itself restart a container. Recreate existing containers after changing the compose file to apply healthcheck configuration.
-
-Stop the cluster:
-
-```sh
-podman compose -f compose.yaml -f compose.podman.yaml down
-```
-
-Named volume `open-webui-data` keeps chats, users, and settings across restarts. Adding `-v` to the `down` command deletes it.
-
-## Configuration tests
-
-Run the Compose configuration checks from the project root:
+The Compose tests render both Docker and Podman configurations using `.env.example` and do not start services. They need Docker Compose or Podman Compose:
 
 ```sh
 python3 -m unittest discover -s tests -v
+docker compose --env-file .env.example config --quiet
 ```
 
-The tests require Python 3 and Podman Compose or Docker Compose. They render both configurations using `.env.example`, not the real `.env`, and do not start containers. Set `COMPOSE_RUNTIME=docker` or `COMPOSE_RUNTIME=podman` to select a runtime when both are installed. These checks do not verify runtime connectivity or firewall isolation.
-
-After building the Open WebUI image, run the Copilot Pipe tests without network access:
+Check the compact MCP catalogs without connecting to network devices:
 
 ```sh
-docker run --rm --network none -v "$PWD/copilot-webui:/work:ro" -w /work -e PYTHONPATH=/app/backend -e WEBUI_SECRET_KEY=local-test-only-not-a-real-secret --entrypoint python network-helper-copilot-webui:local -B -m unittest -v test_copilot_pipe
+docker compose build fortios-mcp cisco-aci-mcp
+docker run --rm --network none --entrypoint python -v "$PWD/fortigate-mcp/test_catalog.py:/app/test_catalog.py:ro" fortios-mcp:local /app/test_catalog.py -v
+docker run --rm --network none --entrypoint python -v "$PWD/cisco-aci-mcp/test_catalog.py:/app/test_catalog.py:ro" cisco-aci-mcp:local /app/test_catalog.py -v
 ```
 
-## Open WebUI
+Build and run the Copilot adapter's offline tests:
 
-Open the URL configured in `WEBUI_URL` and sign in with Microsoft or the local admin. For direct remote access, set it to `http://<server-address>`; use the HTTPS URL instead if a reverse proxy terminates TLS.
-
-Compose registers and enables the Copilot Pipe after Open WebUI is healthy. It uses the local admin credentials from `.env` and leaves any existing `copilot` function unchanged. See [Open WebUI setup and troubleshooting](./open-webui/README.md#github-copilot). Requests use the shared Copilot account. Selected MCP tool calls require confirmation and can modify network devices; restrict access appropriately.
-
-The Entra app registration needs this redirect URI:
-
-```
-<WEBUI_URL>/oauth/microsoft/callback
+```sh
+docker compose build copilot-adapter
+docker compose run --rm --entrypoint python copilot-adapter -m unittest -v test_main
 ```
 
-Compose seeds the six bundled MCP connections as **Public** in Open WebUI, meaning signed-in users can use them. The initializer also adds the Public grant to matching connections on existing volumes; it does not add missing connections or publish MCP ports. See [Open WebUI deployment notes](./open-webui/README.md).
+The existing MCP health checks verify only that each server responds to an MCP initialize request; they do not verify upstream credentials or device access. Tool search is not a security boundary: FortiOS, ACI, and OpenSearch can expose write operations. Use appropriately scoped upstream credentials, including a read-only FortiGate account when only retrieval is intended, and review each tool call before approving it, including the operation and arguments inside `call_tool`.
 
-## Adding or changing an MCP service
+## Project layout
 
-1. Create a folder with a Dockerfile that builds from a pinned upstream ref.
-2. Add a dedicated bridge network and connect both the service and Open WebUI to it, without publishing an MCP host port. Add the network to `compose.podman.yaml` as well.
-3. Add its variables to `.env.example` and `.env`, and reference them in the service's `environment:` block.
-4. Add its URL to `TOOL_SERVER_CONNECTIONS` (the container-internal URL, for example `http://name:port/mcp`).
-5. Recreate the cluster and check the endpoint returns HTTP 200 for an MCP `initialize` request.
-
-Per-service notes:
-
-- [open-webui/README.md](./open-webui/README.md)
-- [fortigate-mcp/README.md](./fortigate-mcp/README.md)
-- [opensearch-mcp/README.md](./opensearch-mcp/README.md)
-
-## Notes
-
-- Cisco ISE and ACI are verified only as running MCP servers. Live device calls are untested until real credentials are set in `.env`.
-- Do not run `podman compose config` without `-q`. It prints resolved secrets to the terminal.
+```text
+compose.yaml              Cluster definition
+compose.podman.yaml       Podman network-isolation override
+librechat/librechat.yaml  LibreChat endpoints, MCP servers, and approvals
+copilot-adapter/          Copilot SDK to OpenAI-compatible HTTP adapter
+litellm/                  Model routing and MCP access policy
+new design/stable_mask.py Stable IP placeholders for LiteLLM
+tests/                    Compose and model/tool-policy tests
+```
