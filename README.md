@@ -66,9 +66,26 @@ Each MCP service remains on its own network. LibreChat joins those networks and 
 
 The MCP catalog is compact for LibreChat. FortiOS exposes generic CMDB, monitor, and log retrieval tools, plus `search_tools` and `call_tool` for its full catalog. Cisco ACI and LibreNMS also use `search_tools` and `call_tool`: search for an operation, then invoke it with the returned name and arguments. LibreNMS remains in read-only mode; FortiOS and ACI search can find write operations. OpenSearch and NetBox retain their existing tools. This reduces tool definitions sent to the model, but requires a model that can search and call tools in multiple steps.
 
+For examples of additional named MCP instances, see [Compose examples](examples/README.md).
+
 By default, LiteLLM and the Copilot adapter reject Copilot requests containing tools or tool results. To allow Copilot to use MCP, explicitly set `ALLOW_COPILOT_MCP=true` in `.env` and recreate LiteLLM and the Copilot adapter. Tool definitions, arguments, and results can then be sent to GitHub Copilot; the configured masking guardrails are not a guarantee that all sensitive network information is removed. Other cloud models remain blocked from MCP. The local Ollama model can use MCP without this opt-in.
 
 Cloud model requests pass through the Presidio and stable-mask guardrails. Names, email addresses, and phone numbers are masked; credit-card detections are blocked. IP addresses use stable HMAC-derived placeholders stored in authenticated Redis, so the same address maps to the same placeholder across requests. Treat the HMAC and Redis secrets as durable data keys and back up Redis with the databases.
+
+## Network Context
+
+The Markdown files in [network-context/](network-context/) provide optional device-specific background for each MCP server: its role, relationships, and operational guidance. Edit the matching file to replace the placeholders with accurate information. At startup, Compose generates the LibreChat configuration with each file as instructions for its corresponding MCP server. The instructions are included when that server's tools are available to an agent; they do not enforce permissions or guarantee that an agent follows them.
+
+These files are tracked in Git and their contents can be sent to the selected model, including GitHub Copilot. Do not include passwords, tokens, private keys, or network details that should not be committed or shared with that model. Keep instructions concise and review changes as carefully as code.
+
+After changing a context file or [librechat.yaml](librechat/librechat.yaml), regenerate the configuration and recreate LibreChat:
+
+```sh
+docker compose run --rm --no-deps librechat-context-init
+docker compose up -d --no-deps --force-recreate librechat
+```
+
+For Podman, use `-f compose.yaml -f compose.podman.yaml` with both commands. Startup fails if a required context file is missing, empty, or larger than 64 KiB. When using additional overlays, include the same files on both commands so LibreChat keeps their networks and settings.
 
 ## Setup
 
@@ -116,23 +133,27 @@ Ensure TCP port 443 is available and the configured public hostname resolves to 
 
 An existing Open WebUI container is no longer managed by this configuration and may remain running as a Compose orphan. Stop and remove it separately when ready; preserve or back up its data volume if its chat history is needed.
 
+The master [compose.yaml](compose.yaml) includes [compose.mcp.yaml](compose.mcp.yaml), so the MCP services start with the rest of the stack:
+
 ```sh
 docker compose up -d --build
 docker compose ps
 docker compose logs -f traefik librechat litellm copilot-adapter
 ```
 
-For Podman, use both Compose files for each command:
+For Podman, add the isolation override:
 
 ```sh
 podman compose -f compose.yaml -f compose.podman.yaml up -d --build
 ```
 
+To add another MCP instance, edit [compose.mcp.yaml](compose.mcp.yaml), configure its credentials and LibreChat entry, and add its context file. See [Compose examples](examples/README.md) for templates and details.
+
 Check `docker compose logs litellm-key-init` if LibreChat cannot authenticate to the model gateway. LibreChat chat history is stored in its own named volumes; Open WebUI history is not migrated.
 
 ## Validation
 
-The Compose tests render both Docker and Podman configurations using `.env.example` and do not start services. They need Docker Compose or Podman Compose:
+The tests need Python with PyYAML and Docker Compose or Podman Compose. The Compose tests render both configurations using `.env.example` and do not start services:
 
 ```sh
 python3 -m unittest discover -s tests -v
@@ -143,8 +164,8 @@ Check the compact MCP catalogs without connecting to network devices:
 
 ```sh
 docker compose build fortios-mcp cisco-aci-mcp
-docker run --rm --network none --entrypoint python -v "$PWD/fortigate-mcp/test_catalog.py:/app/test_catalog.py:ro" fortios-mcp:local /app/test_catalog.py -v
-docker run --rm --network none --entrypoint python -v "$PWD/cisco-aci-mcp/test_catalog.py:/app/test_catalog.py:ro" cisco-aci-mcp:local /app/test_catalog.py -v
+docker run --rm --network none --entrypoint python -v "$PWD/mcp/fortigate/test_catalog.py:/app/test_catalog.py:ro" fortios-mcp:local /app/test_catalog.py -v
+docker run --rm --network none --entrypoint python -v "$PWD/mcp/cisco-aci/test_catalog.py:/app/test_catalog.py:ro" cisco-aci-mcp:local /app/test_catalog.py -v
 ```
 
 Build and run the Copilot adapter's offline tests:
@@ -159,9 +180,13 @@ The existing MCP health checks verify only that each server responds to an MCP i
 ## Project layout
 
 ```text
-compose.yaml              Cluster definition
+compose.yaml              Main cluster definition, including MCP services
+compose.mcp.yaml          Included MCP services and networks
 compose.podman.yaml       Podman network-isolation override
 librechat/librechat.yaml  LibreChat endpoints, MCP servers, and approvals
+mcp/                      MCP server builds and integrations
+examples/                 Compose templates for additional MCP instances
+network-context/          Per-server network context for agents
 copilot-adapter/          Copilot SDK to OpenAI-compatible HTTP adapter
 litellm/                  Model routing and MCP access policy
 new design/stable_mask.py Stable IP placeholders for LiteLLM

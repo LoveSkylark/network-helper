@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 
 ROOT = Path(__file__).resolve().parent.parent
-COMPOSE_FILES = (ROOT / "compose.yaml", ROOT / "compose.podman.yaml")
+COMPOSE_FILES = (ROOT / "compose.yaml", ROOT / "compose.mcp.yaml", ROOT / "compose.podman.yaml")
 EXAMPLE_ENV = ROOT / ".env.example"
 LIBRECHAT_CONFIG = ROOT / "librechat" / "librechat.yaml"
 LITELLM_CONFIG = ROOT / "litellm" / "config.yaml"
@@ -54,7 +54,7 @@ def render_compose(runtime, *, podman_override, overrides=None):
         str(COMPOSE_FILES[0]),
     ]
     if podman_override:
-        command.extend(["-f", str(COMPOSE_FILES[1])])
+        command.extend(["-f", str(COMPOSE_FILES[2])])
     command.extend(["config", "--format", "json"])
     result = subprocess.run(
         command, cwd=ROOT, env=environment, capture_output=True, text=True, check=True
@@ -73,6 +73,12 @@ class ComposeConfigurationTests(unittest.TestCase):
         cls.runtime = runtime
         cls.base = render_compose(runtime, podman_override=False)
         cls.podman = render_compose(runtime, podman_override=True)
+
+    def test_master_includes_mcp_services(self):
+        self.assertRegex(COMPOSE_FILES[0].read_text(), r"(?m)^include:\s*\n\s+- compose\.mcp\.yaml\s*$")
+        for config in (self.base, self.podman):
+            self.assertTrue(MCP_SERVICES.issubset(config["services"]))
+            self.assertNotIn("--without-mcp", config["services"]["librechat-context-init"]["command"])
 
     def test_example_environment_covers_compose_variables(self):
         provided = set(ENV_KEY.findall(EXAMPLE_ENV.read_text()))
@@ -217,6 +223,22 @@ class ComposeConfigurationTests(unittest.TestCase):
         self.assertNotIn("cisco-ise-mcp", services)
         self.assertTrue(set(services["litellm"]["networks"]).isdisjoint(networks))
 
+    def test_mcp_build_contexts_exist_under_mcp_directory(self):
+        contexts = {
+            "fortios-mcp": "fortigate",
+            "opensearch-mcp": "opensearch",
+            "cisco-aci-mcp": "cisco-aci",
+            "netbox-mcp": "netbox",
+            "librenms-mcp": "librenms",
+        }
+        for config in (self.base, self.podman):
+            for name, directory in contexts.items():
+                with self.subTest(service=name):
+                    context = Path(config["services"][name]["build"]["context"])
+                    self.assertEqual(context, ROOT / "mcp" / directory)
+                    self.assertTrue((context / "Dockerfile").is_file())
+        self.assertTrue((ROOT / "mcp/cisco-ise/Dockerfile").is_file())
+
     def test_librenms_tool_search_preserves_read_only_mode(self):
         environment = self.base["services"]["librenms-mcp"]["environment"]
         self.assertEqual(environment["READ_ONLY_MODE"], "true")
@@ -305,13 +327,30 @@ class ComposeConfigurationTests(unittest.TestCase):
             services["librechat"]["environment"]["LITELLM_VIRTUAL_KEY"],
         )
 
+    def test_librechat_loads_generated_server_context(self):
+        for config in (self.base, self.podman):
+            services = config["services"]
+            initializer = services["librechat-context-init"]
+            portal = services["librechat"]
+            self.assertEqual(initializer["network_mode"], "none")
+            self.assertEqual(portal["environment"]["CONFIG_PATH"], "/app/config-generated/librechat.yaml")
+            self.assertEqual(
+                portal["depends_on"]["librechat-context-init"]["condition"],
+                "service_completed_successfully",
+            )
+            output = next(mount for mount in initializer["volumes"] if mount["target"] == "/output")
+            config_mount = next(mount for mount in portal["volumes"] if mount["target"] == "/app/config-generated")
+            self.assertEqual(output["source"], config_mount["source"])
+            self.assertTrue(config_mount["read_only"])
+
     def test_podman_override_preserves_services_and_isolates_mcp_networks(self):
         services = self.base["services"]
         self.assertEqual(set(self.podman["services"]), set(services))
         for name, service in services.items():
             with self.subTest(service=name):
                 overridden = self.podman["services"][name]
-                self.assertEqual(set(overridden["networks"]), set(service["networks"]))
+                self.assertEqual(set(overridden.get("networks", {})), set(service.get("networks", {})))
+                self.assertEqual(overridden.get("network_mode"), service.get("network_mode"))
                 self.assertEqual(overridden.get("ports"), service.get("ports"))
 
         for name in MCP_SERVICES:

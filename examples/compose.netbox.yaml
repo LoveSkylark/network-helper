@@ -1,0 +1,27 @@
+services:
+  netbox-example:
+    build: mcp/netbox
+    image: netbox-mcp:local
+    environment:
+      NETBOX_URL: ${NETBOX_EXAMPLE_URL:-https://netbox.example.com}
+      NETBOX_TOKEN: ${NETBOX_EXAMPLE_TOKEN:-}
+      VERIFY_SSL: ${NETBOX_EXAMPLE_VERIFY_SSL:-true}
+      TRANSPORT: http
+      HOST: 0.0.0.0
+      PORT: "8000"
+    networks:
+      - netbox-example-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8000), timeout=3).close()"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  librechat:
+    networks:
+      - netbox-example-net
+
+networks:
+  netbox-example-net:

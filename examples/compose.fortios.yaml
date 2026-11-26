@@ -1,0 +1,30 @@
+services:
+  fortios-example:
+    build: mcp/fortigate
+    image: fortios-mcp:local
+    environment:
+      FORTIOS_HOST: ${FORTIOS_EXAMPLE_HOST:-https://fortigate.example.com}
+      FORTIOS_API_TOKEN: ${FORTIOS_EXAMPLE_API_TOKEN:-}
+      FORTIOS_VDOM: ${FORTIOS_EXAMPLE_VDOM:-root}
+      FORTIOS_VERIFY_SSL: ${FORTIOS_EXAMPLE_VERIFY_SSL:-true}
+      FORTIOS_TIMEOUT: ${FORTIOS_EXAMPLE_TIMEOUT:-30}
+      MCP_TRANSPORT: streamable-http
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: "8000"
+    stdin_open: true
+    networks:
+      - fortios-example-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8000), timeout=3).close()"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  librechat:
+    networks:
+      - fortios-example-net
+
+networks:
+  fortios-example-net:

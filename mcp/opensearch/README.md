@@ -47,7 +47,7 @@ Run these commands from the project root.
 
 ## Connect it to LibreChat
 
-The connection is already configured in [librechat.yaml](../librechat/librechat.yaml):
+The connection is already configured in [librechat.yaml](../../librechat/librechat.yaml):
 
 - Type: MCP (Streamable HTTP)
 - URL: `http://opensearch-mcp:9900/mcp`
@@ -57,7 +57,7 @@ Select the OpenSearch tools in a LibreChat agent and ask a question about an ind
 
 ## Tools and scope
 
-By default the server loads core tools: list indices, get mappings, search, count, cluster health, shard info, msearch, explain, and a generic API tool. Agentic memory and observability tools are off by default. To enable them, add `OPENSEARCH_ENABLED_CATEGORIES` to the root `.env` and pass it through the service's `environment` block in `compose.yaml`. Check the package documentation for the category names.
+By default the server loads core tools: list indices, get mappings, search, count, cluster health, shard info, msearch, explain, and a generic API tool. Agentic memory and observability tools are off by default. To enable them, add `OPENSEARCH_ENABLED_CATEGORIES` to the root `.env` and pass it through the service's `environment` block in `compose.mcp.yaml`. Check the package documentation for the category names.
 
 The generic API tool can call arbitrary OpenSearch REST endpoints. Use a read-only user so that writes are not possible.
 

@@ -1,0 +1,157 @@
+x-mcp-healthcheck-script: &mcp-healthcheck-script |
+  import json
+  import sys
+  from urllib.request import ProxyHandler, Request, build_opener
+
+  url = f"http://127.0.0.1:{sys.argv[1]}/mcp"
+  opener = build_opener(ProxyHandler({}))
+  payload = json.dumps({
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "initialize",
+      "params": {
+          "protocolVersion": "2025-03-26",
+          "capabilities": {},
+          "clientInfo": {"name": "healthcheck", "version": "1"},
+      },
+  }).encode()
+  headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
+  session = None
+  try:
+      with opener.open(Request(url, data=payload, headers=headers), timeout=5) as response:
+          session = response.headers.get("Mcp-Session-Id")
+          if response.headers.get_content_type() == "text/event-stream":
+              for line in response:
+                  if line.startswith(b"data:"):
+                      result = json.loads(line[5:])
+                      break
+              else:
+                  raise ValueError("MCP response contained no data event")
+          else:
+              result = json.load(response)
+          if result.get("id") != 1 or not result.get("result", {}).get("serverInfo", {}).get("name"):
+              raise ValueError("Invalid MCP initialize response")
+  finally:
+      if session:
+          request = Request(url, headers={"Mcp-Session-Id": session}, method="DELETE")
+          with opener.open(request, timeout=2):
+              pass
+
+x-mcp-healthcheck: &mcp-healthcheck
+  interval: 60s
+  timeout: 10s
+  retries: 3
+  start_period: 60s
+
+services:
+  fortios-mcp:
+    build: mcp/fortigate
+    image: fortios-mcp:local
+    environment:
+      FORTIOS_HOST: ${FORTIOS_HOST}
+      FORTIOS_API_TOKEN: ${FORTIOS_API_TOKEN}
+      FORTIOS_VDOM: ${FORTIOS_VDOM}
+      FORTIOS_VERIFY_SSL: ${FORTIOS_VERIFY_SSL}
+      FORTIOS_TIMEOUT: ${FORTIOS_TIMEOUT}
+      MCP_TRANSPORT: "streamable-http"
+      MCP_HOST: "0.0.0.0"
+      MCP_PORT: "8000"
+    stdin_open: true
+    networks:
+      - fortios-net
+    restart: unless-stopped
+    healthcheck:
+      <<: *mcp-healthcheck
+      test: ["CMD", "python", "-c", *mcp-healthcheck-script, "8000"]
+
+  opensearch-mcp:
+    build: mcp/opensearch
+    image: opensearch-mcp:local
+    environment:
+      OPENSEARCH_URL: ${OPENSEARCH_URL}
+      OPENSEARCH_AUTH_MODE: ${OPENSEARCH_AUTH_MODE:-basic}
+      OPENSEARCH_TOKEN: ${OPENSEARCH_TOKEN:-}
+      OPENSEARCH_USERNAME: ${OPENSEARCH_USERNAME}
+      OPENSEARCH_PASSWORD: ${OPENSEARCH_PASSWORD}
+      OPENSEARCH_SSL_VERIFY: ${OPENSEARCH_SSL_VERIFY}
+    networks:
+      - opensearch-net
+    restart: unless-stopped
+    healthcheck:
+      <<: *mcp-healthcheck
+      test: ["CMD", "python", "-c", *mcp-healthcheck-script, "9900"]
+
+  # cisco-ise-mcp:
+  #   build: mcp/cisco-ise
+  #   image: cisco-ise-mcp:local
+  #   environment:
+  #     ISE_IP: ${ISE_IP}
+  #     API_USERNAME: ${API_USERNAME}
+  #     API_PWD: ${API_PWD}
+  #     ISE_VERIFY_SERVER_CERT: ${ISE_VERIFY_SERVER_CERT}
+  #     ISE_VERIFY_HOSTNAME: ${ISE_VERIFY_HOSTNAME}
+  #     DEBUG_MCP: ${DEBUG_MCP}
+  #   networks:
+  #     - cisco-ise-net
+  #   restart: unless-stopped
+  #   healthcheck:
+  #     <<: *mcp-healthcheck
+  #     test: ["CMD", "python", "-c", *mcp-healthcheck-script, "5000"]
+
+  cisco-aci-mcp:
+    build: mcp/cisco-aci
+    image: cisco-aci-mcp:local
+    environment:
+      APIC_URL: ${APIC_URL}
+      USERNAME: ${ACI_USERNAME}
+      PASSWORD: ${ACI_PASSWORD}
+    networks:
+      - cisco-aci-net
+    restart: unless-stopped
+    healthcheck:
+      <<: *mcp-healthcheck
+      test: ["CMD", "python", "-c", *mcp-healthcheck-script, "8000"]
+
+  netbox-mcp:
+    build: mcp/netbox
+    image: netbox-mcp:local
+    environment:
+      NETBOX_URL: ${NETBOX_URL}
+      NETBOX_TOKEN: ${NETBOX_TOKEN}
+      VERIFY_SSL: ${NETBOX_VERIFY_SSL}
+      TRANSPORT: "http"
+      HOST: "0.0.0.0"
+      PORT: "8000"
+    networks:
+      - netbox-net
+    restart: unless-stopped
+    healthcheck:
+      <<: *mcp-healthcheck
+      test: ["CMD", "python", "-c", *mcp-healthcheck-script, "8000"]
+
+  librenms-mcp:
+    build: mcp/librenms
+    image: librenms-mcp:local
+    environment:
+      LIBRENMS_URL: ${LIBRENMS_URL}
+      LIBRENMS_TOKEN: ${LIBRENMS_TOKEN}
+      LIBRENMS_VERIFY_SSL: ${LIBRENMS_VERIFY_SSL}
+      READ_ONLY_MODE: "true"
+      TOOL_SEARCH_ENABLED: "true"
+      MCP_TRANSPORT: "http"
+      MCP_HTTP_HOST: "0.0.0.0"
+      MCP_HTTP_PORT: "8000"
+    networks:
+      - librenms-net
+    restart: unless-stopped
+    healthcheck:
+      <<: *mcp-healthcheck
+      test: ["CMD", "python", "-c", *mcp-healthcheck-script, "8000"]
+
+networks:
+  fortios-net:
+  opensearch-net:
+  cisco-ise-net:
+  cisco-aci-net:
+  netbox-net:
+  librenms-net:
