@@ -148,6 +148,17 @@ class ComposeConfigurationTests(unittest.TestCase):
         self.assertEqual(str(port["published"]), "443")
         self.assertEqual(port["target"], 443)
 
+    def test_librechat_is_the_only_configured_portal(self):
+        for config in (self.base, self.podman):
+            services = config["services"]
+            self.assertNotIn("open-webui", services)
+            routed_services = {
+                name
+                for name, service in services.items()
+                if any(label.startswith("traefik.http.routers.") for label in service.get("labels", {}))
+            }
+            self.assertEqual(routed_services, {"librechat"})
+
     def test_traefik_routes_librechat_with_tls(self):
         services = self.base["services"]
         traefik = services["traefik"]

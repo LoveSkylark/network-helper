@@ -20,7 +20,7 @@ Cisco ISE is disabled in the Compose file, so it is not configured as a LibreCha
 
 Each MCP service remains on its own network. LibreChat joins those networks and a client network shared with LiteLLM. The Copilot adapter, Redis, and Presidio are on a separate upstream network that LibreChat cannot reach; only LiteLLM joins both. LiteLLM's PostgreSQL database is on a separate internal network shared only with LiteLLM, independent of the LibreChat RAG database. MCP servers are hidden from ordinary chat and are available through Agents. Across all agents, LibreChat automatically approves FortiOS, Cisco ACI, and LibreNMS catalog searches and the four direct FortiOS retrieval tools. Other calls require approval, including `call_tool`, which can invoke writes.
 
-The shared MCP catalog is compact for both LibreChat and Open WebUI. FortiOS exposes generic CMDB, monitor, and log retrieval tools, plus `search_tools` and `call_tool` for its full catalog. Cisco ACI and LibreNMS also use `search_tools` and `call_tool`: search for an operation, then invoke it with the returned name and arguments. LibreNMS remains in read-only mode; FortiOS and ACI search can find write operations. OpenSearch and NetBox retain their existing tools. This reduces tool definitions sent to the model, but requires a model that can search and call tools in multiple steps.
+The MCP catalog is compact for LibreChat. FortiOS exposes generic CMDB, monitor, and log retrieval tools, plus `search_tools` and `call_tool` for its full catalog. Cisco ACI and LibreNMS also use `search_tools` and `call_tool`: search for an operation, then invoke it with the returned name and arguments. LibreNMS remains in read-only mode; FortiOS and ACI search can find write operations. OpenSearch and NetBox retain their existing tools. This reduces tool definitions sent to the model, but requires a model that can search and call tools in multiple steps.
 
 By default, LiteLLM and the Copilot adapter reject Copilot requests containing tools or tool results. To allow Copilot to use MCP, explicitly set `ALLOW_COPILOT_MCP=true` in `.env` and recreate LiteLLM and the Copilot adapter. Tool definitions, arguments, and results can then be sent to GitHub Copilot; the configured masking guardrails are not a guarantee that all sensitive network information is removed. Other cloud models remain blocked from MCP. The local Ollama model can use MCP without this opt-in.
 
@@ -70,7 +70,7 @@ The LibreChat endpoints use a LiteLLM virtual key, separate from the gateway mas
 
 Ensure TCP port 443 is available and the configured public hostname resolves to this host. For Podman, set `TRAEFIK_DOCKER_SOCKET` to the running Docker-compatible Podman socket.
 
-For the pilot, do not run `docker compose down --remove-orphans`: the existing Open WebUI container is an orphan in this Compose project, and that option would remove it. A normal `up` leaves it running.
+An existing Open WebUI container is no longer managed by this configuration and may remain running as a Compose orphan. Stop and remove it separately when ready; preserve or back up its data volume if its chat history is needed.
 
 ```sh
 docker compose up -d --build

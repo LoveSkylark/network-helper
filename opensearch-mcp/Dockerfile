@@ -11,5 +11,4 @@ RUN groupadd --gid 10001 mcp \
 USER mcp
 EXPOSE 9900
 
-# Streamable HTTP so Open WebUI can connect over the service network.
 CMD ["python", "-m", "mcp_server_opensearch", "--transport", "stream", "--host", "0.0.0.0", "--port", "9900"]
