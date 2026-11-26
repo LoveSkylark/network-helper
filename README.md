@@ -4,15 +4,15 @@ LibreChat is the chat portal. Its OpenAI-compatible endpoint is LiteLLM, which r
 
 | Service | Host port | Purpose |
 |---|---:|---|
-| Traefik | 443 | HTTPS ingress and automatic Let's Encrypt certificates |
-| LibreChat | internal | Chat UI, local or Microsoft Entra sign-in, and MCP client |
-| LiteLLM | not published | Model routing, PII masking, MCP policy, and virtual keys |
-| Copilot adapter | not published | OpenAI-compatible bridge to the official Copilot SDK |
-| MongoDB, Meilisearch, RAG API, pgvector | not published | LibreChat accounts, chat search, and document search |
-| LiteLLM PostgreSQL | not published | Virtual-key and gateway state |
-| Redis, Presidio analyzer/anonymizer | not published | Stable-mask token storage and PII detection |
-| Ollama | external | Local chat and embedding models |
-| FortiOS, OpenSearch, Cisco ACI, NetBox, LibreNMS | not published | Internal MCP tools |
+| Traefik | 443 | Connects users securely to the portal and manages HTTPS certificates |
+| LibreChat | internal | Lets users sign in, chat with models, and use network tools |
+| LiteLLM | not published | Routes chat requests to the selected model and applies data-protection rules |
+| Copilot adapter | not published | Connects the model gateway to GitHub Copilot |
+| MongoDB, Meilisearch, RAG API, pgvector | not published | Store accounts and chats, make chat history searchable, and help answer questions using uploaded documents |
+| LiteLLM PostgreSQL | not published | Stores gateway settings and access keys |
+| Redis, Presidio analyzer/anonymizer | not published | Help mask sensitive information and restore masked IP addresses in responses |
+| Ollama | external | Runs local chat and document-search models |
+| MCP servers | not published | Give agents access to firewall, log, fabric, inventory, and monitoring information |
 
 Cisco ISE is disabled in the Compose file, so it is not configured as a LibreChat MCP server.
 
