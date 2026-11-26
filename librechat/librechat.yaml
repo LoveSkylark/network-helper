@@ -54,6 +54,7 @@ endpoints:
     - name: "Network Helper"
       apiKey: "${LITELLM_VIRTUAL_KEY}"
       baseURL: "http://litellm:4000/v1"
+      maxToolResultChars: 32768
       models:
         default: ["copilot-auto", "local-ollama"]
         fetch: true
