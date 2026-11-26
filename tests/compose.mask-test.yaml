@@ -1,0 +1,63 @@
+services:
+  redis:
+    image: redis:7.4.2-alpine
+    pull_policy: never
+    networks: [isolated]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  analyzer:
+    image: mcr.microsoft.com/presidio-analyzer:latest
+    pull_policy: never
+    depends_on:
+      anonymizer:
+        condition: service_healthy
+    networks: [isolated]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:3000/health"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  anonymizer:
+    image: mcr.microsoft.com/presidio-anonymizer:latest
+    pull_policy: never
+    networks: [isolated]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:3000/health"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  test:
+    image: network-helper-litellm:local
+    pull_policy: never
+    entrypoint: ["python", "/workspace/tests/test_mask_pipeline.py", "-v"]
+    environment:
+      MASK_PIPELINE_INTEGRATION: "1"
+      STABLEMASK_HMAC_KEY: isolated-synthetic-test-key
+      STABLEMASK_REDIS_URL: redis://redis:6379/0
+      PRESIDIO_ANALYZER_API_BASE: http://analyzer:3000
+      PRESIDIO_ANONYMIZER_API_BASE: http://anonymizer:3000
+    volumes:
+      - ..:/workspace:ro
+      - ../new design/stable_mask.py:/app/stable_mask.py:ro
+      - ../litellm/local_only_mcp.py:/app/local_only_mcp.py:ro
+      - ../litellm/mcp_policy.py:/app/mcp_policy.py:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+      analyzer:
+        condition: service_healthy
+      anonymizer:
+        condition: service_healthy
+    networks: [isolated]
+
+networks:
+  isolated:
+    internal: true

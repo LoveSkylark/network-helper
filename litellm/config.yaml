@@ -24,9 +24,10 @@ guardrails:
   - guardrail_name: presidio-mask
     litellm_params:
       guardrail: presidio
-      mode: [pre_call, post_call]
+      mode: pre_call
       default_on: true
       output_parse_pii: true
+      presidio_filter_scope: input
       pii_entities_config:
         PERSON: MASK
         EMAIL_ADDRESS: MASK

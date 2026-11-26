@@ -70,7 +70,7 @@ For examples of additional named MCP instances, see [Compose examples](examples/
 
 By default, LiteLLM and the Copilot adapter reject Copilot requests containing tools or tool results. To allow Copilot to use MCP, explicitly set `ALLOW_COPILOT_MCP=true` in `.env` and recreate LiteLLM and the Copilot adapter. Tool definitions, arguments, and results can then be sent to GitHub Copilot; the configured masking guardrails are not a guarantee that all sensitive network information is removed. Other cloud models remain blocked from MCP. The local Ollama model can use MCP without this opt-in.
 
-Cloud model requests pass through the Presidio and stable-mask guardrails. Names, email addresses, and phone numbers are masked; credit-card detections are blocked. IP addresses use stable HMAC-derived placeholders stored in authenticated Redis, so the same address maps to the same placeholder across requests. Treat the HMAC and Redis secrets as durable data keys and back up Redis with the databases.
+Cloud model requests pass through the Presidio and stable-mask guardrails. Names, email addresses, and phone numbers are masked; credit-card detections are blocked. IP addresses use stable HMAC-derived placeholders stored in authenticated Redis, so the same address maps to the same placeholder across requests. The gateway restores recognized placeholders in responses when the model returns them unchanged; generic redactions or altered placeholders cannot be reliably restored. Presidio scans inputs, not newly generated response text. Treat the HMAC and Redis secrets as durable data keys and back up Redis with the databases.
 
 ## Network Context
 
@@ -174,6 +174,15 @@ Build and run the Copilot adapter's offline tests:
 docker compose build copilot-adapter
 docker compose run --rm --entrypoint python copilot-adapter -m unittest -v test_main
 ```
+
+To test masking and restoration without contacting Copilot, run the synthetic integration test in its own internal-only Docker network. It uses locally available LiteLLM, Redis, and Presidio images and a mock model; it does not use production credentials or data:
+
+```sh
+docker compose -p network-helper-mask-test -f tests/compose.mask-test.yaml up --abort-on-container-exit --exit-code-from test
+docker compose -p network-helper-mask-test -f tests/compose.mask-test.yaml down
+```
+
+The test checks MCP tool results and exact placeholder restoration in streamed and non-streamed responses. It cannot guarantee that a real model will return every placeholder unchanged.
 
 The existing MCP health checks verify only that each server responds to an MCP initialize request; they do not verify upstream credentials or device access. Tool search is not a security boundary: FortiOS, ACI, and OpenSearch can expose write operations. Use appropriately scoped upstream credentials, including a read-only FortiGate account when only retrieval is intended, and review each tool call before approving it, including the operation and arguments inside `call_tool`.
 
